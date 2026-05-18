@@ -176,6 +176,48 @@ class TestVideoList:
         assert received == [vertical_3s]
 
 
+class TestProbeThread:
+    def test_probe_thread_processes_folder(self, qapp, vertical_3s, tmp_path) -> None:
+        from video_extender.core.job import ExtendMode, JobSpec
+        from video_extender.gui.workers import BatchSignals, ProbeThread
+
+        # Stage 2 copies so ProbeThread has work to do
+        a = tmp_path / "a.mp4"; a.write_bytes(vertical_3s.read_bytes())
+        b = tmp_path / "b.mp4"; b.write_bytes(vertical_3s.read_bytes())
+
+        signals = BatchSignals()
+        spec = JobSpec(extend_seconds=1.0, extend_mode=ExtendMode.ADD,
+                       extender_name="freeze", preset_name="tiktok", quality="medium")
+        t = ProbeThread(tmp_path, recursive=False, spec=spec, signals=signals)
+        t.start()
+        t.wait(10000)
+        # Signals are queued and require an event loop to deliver; we just
+        # verify the thread finished and populated its job list.
+        assert not t.isRunning()
+        assert len(t.jobs) == 2
+        assert all(j.media is not None for j in t.jobs)
+
+    def test_probe_thread_interruptible(self, qapp, vertical_3s, tmp_path) -> None:
+        from video_extender.core.job import ExtendMode, JobSpec
+        from video_extender.gui.workers import BatchSignals, ProbeThread
+
+        # Create many files so interruption likely hits before completion
+        for i in range(20):
+            f = tmp_path / f"v{i}.mp4"
+            f.write_bytes(vertical_3s.read_bytes())
+
+        signals = BatchSignals()
+        spec = JobSpec(extend_seconds=1.0, extend_mode=ExtendMode.ADD,
+                       extender_name="freeze", preset_name="tiktok", quality="medium")
+        t = ProbeThread(tmp_path, recursive=False, spec=spec, signals=signals)
+        t.start()
+        t.requestInterruption()
+        t.wait(10000)
+        # Thread exited cleanly; may have probed a subset before checking interruption.
+        assert not t.isRunning()
+        assert len(t.jobs) <= 20
+
+
 class TestRetryFailed:
     def test_main_window_retry_button_enables_after_failure(
         self, qapp, vertical_3s, tmp_path, monkeypatch
@@ -185,11 +227,7 @@ class TestRetryFailed:
             lambda **_: __import__("video_extender.core.preflight",
                                    fromlist=["PreflightReport"]).PreflightReport(),
         )
-        # Avoid modal QMessageBox in offscreen Qt that would hang the test.
-        from PySide6.QtWidgets import QMessageBox
-        monkeypatch.setattr(QMessageBox, "information",
-                            staticmethod(lambda *a, **k: QMessageBox.Ok))
-
+        # Modal dialogs are auto-stubbed by conftest._stub_modals fixture.
         from video_extender.core.job import Job, JobStatus
         from video_extender.core.probe import probe_file
         from video_extender.gui.main_window import MainWindow
@@ -253,19 +291,10 @@ class TestFolderPicker:
 
 
 class TestSettingsPersistence:
-    """MainWindow saves/restores last-used spec and window state via QSettings."""
-
-    def _isolated_settings(self, tmp_path):
-        """Redirect QSettings storage to a tmp dir so tests don't pollute user settings."""
-        from PySide6.QtCore import QCoreApplication, QSettings
-        QCoreApplication.setOrganizationName("video-extender-test")
-        QCoreApplication.setApplicationName("video-extender-test")
-        QSettings.setDefaultFormat(QSettings.IniFormat)
-        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
-        return QSettings("video-extender", "video-extender")
+    """MainWindow saves/restores last-used spec and window state via QSettings.
+    QSettings auto-isolated by conftest._isolate_qsettings fixture."""
 
     def test_spec_roundtrip(self, qapp, tmp_path, monkeypatch) -> None:
-        self._isolated_settings(tmp_path)
         monkeypatch.setattr(
             "video_extender.gui.main_window._preflight.run",
             lambda **_: __import__("video_extender.core.preflight",

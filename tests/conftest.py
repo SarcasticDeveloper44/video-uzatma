@@ -2,14 +2,57 @@
 
 These are generated on-demand via ffmpeg lavfi (NOT placeholders/demo data) and
 exercise the real codec / decoder paths. Cached for the whole session.
+
+Also auto-isolates QSettings and stubs modal QMessageBox dialogs so GUI tests
+cannot pollute the user's actual settings nor hang on offscreen modals.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+# Force offscreen Qt platform for any test that imports PySide6.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_qsettings(tmp_path_factory):
+    """Redirect QSettings to a tmp dir so test runs don't touch user settings."""
+    try:
+        from PySide6.QtCore import QCoreApplication, QSettings
+    except ImportError:
+        return
+    settings_root = tmp_path_factory.mktemp("vx_qsettings")
+    QCoreApplication.setOrganizationName("video-extender-test")
+    QCoreApplication.setApplicationName("video-extender-test")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(settings_root))
+    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(settings_root))
+
+
+@pytest.fixture(autouse=True)
+def _stub_modals(monkeypatch):
+    """Replace blocking QMessageBox.* calls with no-ops returning the default button.
+
+    This prevents tests that exercise MainWindow code paths from hanging on
+    offscreen Qt modals (preflight warnings, batch completion summaries, etc.).
+    """
+    try:
+        from PySide6.QtWidgets import QMessageBox
+    except ImportError:
+        return
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "critical",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
 
 
 def _has(binary: str) -> bool:

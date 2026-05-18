@@ -5,9 +5,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from video_extender.core.ffmpeg import FFmpegRunner
 from video_extender.core.hardware import detect
 from video_extender.core.job import Job, JobSpec, JobStatus
-from video_extender.core.pipeline import BatchRunner, build_jobs
+from video_extender.core.pipeline import BatchRunner
+from video_extender.core.probe import probe_file
 from video_extender.utils.paths import discover_videos
 
 
@@ -20,7 +22,12 @@ class BatchSignals(QObject):
 
 
 class ProbeThread(QThread):
-    """Discover & probe videos off the GUI thread, then surface them."""
+    """Discover & probe videos off the GUI thread.
+
+    Probes one video at a time and checks `isInterruptionRequested()` between
+    each, so a folder switch or window-close can stop the work mid-scan
+    instead of blocking until every file is probed.
+    """
     def __init__(self, folder: Path, recursive: bool, spec: JobSpec, signals: BatchSignals) -> None:
         super().__init__()
         self.folder = folder
@@ -35,9 +42,19 @@ class ProbeThread(QThread):
             if not sources:
                 self.signals.error.emit("Klasörde video bulunamadı.")
                 return
-            self.jobs = build_jobs(sources, self.spec)
-            for j in self.jobs:
-                self.signals.job_added.emit(j)
+            runner = FFmpegRunner()
+            for src in sources:
+                if self.isInterruptionRequested():
+                    return
+                try:
+                    media = probe_file(src, runner)
+                    job = Job(source=src, media=media, spec=self.spec)
+                except Exception as exc:  # noqa: BLE001
+                    job = Job(source=src, spec=self.spec,
+                              status=JobStatus.FAILED,
+                              error=f"probe failed: {exc}")
+                self.jobs.append(job)
+                self.signals.job_added.emit(job)
         except Exception as exc:  # noqa: BLE001
             self.signals.error.emit(f"Probe hatası: {exc}")
 
