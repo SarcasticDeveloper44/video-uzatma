@@ -61,6 +61,7 @@ class VideoListWidget(QTableWidget):
     """Table showing each Job's status and progress."""
     row_open_log = Signal(Path)
     row_remove_requested = Signal(Path)  # emits source path of row to remove
+    row_retry_requested = Signal(Path)   # emits source path of failed row to retry
 
     COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Boyut", "Worker"]
 
@@ -88,21 +89,19 @@ class VideoListWidget(QTableWidget):
         source = next((s for s, r in self._row_for_source.items() if r == row), None)
         if source is None:
             return
-        # Only show "Remove" if this row is still pending (not running/completed).
         status_item = self.item(row, 3)
-        is_terminal_or_running = (
-            status_item is not None and status_item.text() in {
-                STATUS_TEXT[JobStatus.RUNNING], STATUS_TEXT[JobStatus.COMPLETED],
-                STATUS_TEXT[JobStatus.FAILED], STATUS_TEXT[JobStatus.CANCELLED],
-                STATUS_TEXT[JobStatus.SKIPPED],
-            }
-        )
-        if is_terminal_or_running:
-            return
+        status_text = status_item.text() if status_item else ""
         menu = QMenu(self)
-        action = QAction("Bu video'yu listeden çıkar", self)
-        action.triggered.connect(lambda: self.row_remove_requested.emit(source))
-        menu.addAction(action)
+        if status_text == STATUS_TEXT[JobStatus.FAILED]:
+            retry = QAction("Bu video'yu yeniden dene", self)
+            retry.triggered.connect(lambda: self.row_retry_requested.emit(source))
+            menu.addAction(retry)
+        elif status_text in {STATUS_TEXT[JobStatus.PENDING], STATUS_TEXT[JobStatus.QUEUED]}:
+            remove = QAction("Bu video'yu listeden çıkar", self)
+            remove.triggered.connect(lambda: self.row_remove_requested.emit(source))
+            menu.addAction(remove)
+        else:
+            return  # running/completed/cancelled/skipped — no actions
         menu.exec(self.viewport().mapToGlobal(pos))
 
     def remove_row_for(self, source: Path) -> bool:

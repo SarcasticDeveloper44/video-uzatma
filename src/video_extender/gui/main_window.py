@@ -69,12 +69,15 @@ class MainWindow(QMainWindow):
         # --- Bottom: action bar ---
         action_row = QHBoxLayout()
         self.summary_label = QLabel("")
+        self.retry_btn = QPushButton("Başarısızları Yeniden Dene")
+        self.retry_btn.setEnabled(False)
         self.start_btn = QPushButton("Başlat")
         self.start_btn.setMinimumWidth(140)
         self.start_btn.setEnabled(False)
         self.cancel_btn = QPushButton("İptal")
         self.cancel_btn.setEnabled(False)
         action_row.addWidget(self.summary_label, 1)
+        action_row.addWidget(self.retry_btn)
         action_row.addWidget(self.cancel_btn)
         action_row.addWidget(self.start_btn)
         root_layout.addLayout(action_row)
@@ -99,6 +102,10 @@ class MainWindow(QMainWindow):
         self.video_list.cellDoubleClicked.connect(self._on_row_double_clicked)
         # Right-click → remove pending video from queue
         self.video_list.row_remove_requested.connect(self._on_remove_row)
+        # Right-click on failed → retry that one
+        self.video_list.row_retry_requested.connect(self._on_retry_row)
+        # Retry-all-failed button
+        self.retry_btn.clicked.connect(self._retry_failed)
 
         self._refresh_summary()
         self._run_initial_preflight()
@@ -224,6 +231,7 @@ class MainWindow(QMainWindow):
         self._batch_thread = BatchThread(self._jobs, spec, self.folder_picker.folder, self.signals)
         self._batch_thread.start()
         self.start_btn.setEnabled(False)
+        self.retry_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
 
     def _cancel_batch(self) -> None:
@@ -282,13 +290,15 @@ class MainWindow(QMainWindow):
     def _on_batch_finished(self, completed: int, failed: int, skipped: int) -> None:
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.retry_btn.setEnabled(failed > 0)
         msg = f"{completed} tamam · {failed} hata · {skipped} atlandı"
         self.statusBar().showMessage(msg)
         notify("Video Extender", msg)
         if failed:
             QMessageBox.information(
                 self, "Batch tamamlandı",
-                f"{msg}\n\nDetaylı log: output/logs/ klasöründe.",
+                f"{msg}\n\nBaşarısızları yeniden denemek için 'Başarısızları Yeniden Dene' "
+                f"düğmesi aktif. Detaylı log: output/logs/ klasöründe.",
             )
 
     def _on_error(self, msg: str) -> None:
@@ -365,6 +375,40 @@ class MainWindow(QMainWindow):
     # -----------------------------------------------------------------
     # Inline ffmpeg log viewer (for failed jobs)
     # -----------------------------------------------------------------
+    def _retry_failed(self) -> None:
+        """Reset every FAILED job to PENDING and re-run the batch."""
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            return
+        targets = [j for j in self._jobs if j.status == JobStatus.FAILED]
+        if not targets:
+            return
+        for j in targets:
+            self._reset_job_for_retry(j)
+        self._start_batch()
+
+    def _on_retry_row(self, source: Path) -> None:
+        """Retry a single failed row."""
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            QMessageBox.information(
+                self, "İşlem devam ediyor",
+                "Batch çalışırken yeniden deneme başlatılamaz. Önce bitmesini bekle.",
+            )
+            return
+        job = next((j for j in self._jobs if j.source == source), None)
+        if job is None or job.status != JobStatus.FAILED:
+            return
+        self._reset_job_for_retry(job)
+        self._start_batch()
+
+    def _reset_job_for_retry(self, job: Job) -> None:
+        job.status = JobStatus.PENDING
+        job.progress = 0.0
+        job.error = None
+        job.speed = 0.0
+        job.eta_seconds = 0.0
+        job.worker_label = ""
+        self.video_list.update_job(job)
+
     def _on_remove_row(self, source: Path) -> None:
         # Only allow removal when no batch is running.
         if self._batch_thread is not None and self._batch_thread.isRunning():

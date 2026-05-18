@@ -176,6 +176,66 @@ class TestVideoList:
         assert received == [vertical_3s]
 
 
+class TestRetryFailed:
+    def test_main_window_retry_button_enables_after_failure(
+        self, qapp, vertical_3s, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        # Avoid modal QMessageBox in offscreen Qt that would hang the test.
+        from PySide6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, "information",
+                            staticmethod(lambda *a, **k: QMessageBox.Ok))
+
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+        from video_extender.gui.main_window import MainWindow
+
+        w = MainWindow()
+        media = probe_file(vertical_3s)
+        ok_job = Job(source=tmp_path / "ok.mp4", media=media, status=JobStatus.COMPLETED)
+        fail_job = Job(source=tmp_path / "bad.mp4", media=media,
+                       status=JobStatus.FAILED, error="boom")
+        w._jobs = [ok_job, fail_job]
+        w.video_list.add_job(ok_job)
+        w.video_list.add_job(fail_job)
+
+        assert w.retry_btn.isEnabled() is False
+        w._on_batch_finished(1, 1, 0)
+        assert w.retry_btn.isEnabled() is True
+        w.close()
+
+    def test_reset_job_for_retry_clears_state(self, qapp, vertical_3s) -> None:
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+        from video_extender.gui.main_window import MainWindow
+
+        # Avoid preflight modal dialogs
+        import video_extender.core.preflight as pf
+        pf.run = lambda **_: pf.PreflightReport()
+
+        w = MainWindow()
+        media = probe_file(vertical_3s)
+        job = Job(
+            source=vertical_3s, media=media,
+            status=JobStatus.FAILED, progress=0.4, error="ffmpeg exit 1",
+            speed=5.0, eta_seconds=120.0, worker_label="GPU#0",
+        )
+        w._jobs = [job]
+        w.video_list.add_job(job)
+        w._reset_job_for_retry(job)
+        assert job.status == JobStatus.PENDING
+        assert job.progress == 0.0
+        assert job.error is None
+        assert job.speed == 0.0
+        assert job.eta_seconds == 0.0
+        assert job.worker_label == ""
+        w.close()
+
+
 class TestHardwareInfoWidget:
     def test_renders(self, qapp) -> None:
         hi = HardwareInfoWidget()
