@@ -157,6 +157,18 @@ class TestSubtitleBurn:
         # Colon in path must be escaped (\:)
         assert "co\\:lon" in frag.filter_segment
 
+    def test_windows_drive_letter_path(self, tmp_path, monkeypatch) -> None:
+        """A Windows-style C:\\Users\\...\\subs.srt path must escape both the
+        drive-letter colon AND every backslash so ffmpeg parses it correctly."""
+        srt = tmp_path / "sub.srt"
+        srt.write_text("1\n00:00:00,500 --> 00:00:01,500\nx\n")
+        # Bypass the existence check by patching the escape function directly:
+        # we want to assert the produced segment, not the file existence.
+        from video_extender.core.filters.subtitle_burn import _escape_filter_path
+        escaped = _escape_filter_path(r"C:\Users\ad\subs.srt")
+        # Expected: 'C\:\\Users\\ad\\subs.srt' (colon→\:, each \ → \\)
+        assert escaped == "C\\:\\\\Users\\\\ad\\\\subs.srt"
+
 
 class TestColorGrade:
     def test_defaults_are_noop(self) -> None:

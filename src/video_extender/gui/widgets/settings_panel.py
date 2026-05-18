@@ -165,15 +165,32 @@ class SettingsPanel(QFrame):
         self.changed.emit()
 
     def _populate_encoder_choices(self) -> None:
-        """Add to the encoder dropdown only encoders that are listed AND functional."""
+        """Add encoders to the dropdown — listed + functional encoders enabled,
+        unavailable ones greyed out. Probes run in parallel to keep GUI
+        startup fast on systems with multiple GPU candidates.
+        """
+        from concurrent.futures import ThreadPoolExecutor
         from video_extender.core.encoders import ENCODER_REGISTRY
         from video_extender.core.hardware import detect, probe_encoder
         hw = detect()
-        # Group: working GPU encoders first, then CPU, then unavailable greyed-out.
+
+        # Parallelize probe calls — each one is a subprocess, so they're
+        # I/O-bound and benefit from threading even with the GIL.
+        listed_encoders = [
+            (name, cls) for name, cls in ENCODER_REGISTRY.items()
+            if cls.ffmpeg_encoder in hw.available_encoders
+        ]
+        functional_map: dict[str, bool] = {}
+        if listed_encoders:
+            with ThreadPoolExecutor(max_workers=min(8, len(listed_encoders))) as pool:
+                results = pool.map(probe_encoder, [c.ffmpeg_encoder for _, c in listed_encoders])
+                for (_, cls), ok in zip(listed_encoders, results):
+                    functional_map[cls.ffmpeg_encoder] = ok
+
         gpu_avail, cpu_avail, unavailable = [], [], []
         for name, cls in sorted(ENCODER_REGISTRY.items(), key=lambda kv: (kv[1].kind, kv[0])):
             listed = cls.ffmpeg_encoder in hw.available_encoders
-            functional = listed and probe_encoder(cls.ffmpeg_encoder)
+            functional = functional_map.get(cls.ffmpeg_encoder, False)
             label = cls.label + ("" if functional else " [çalışmıyor]")
             entry = (cls.ffmpeg_encoder, label, functional)
             if not listed:

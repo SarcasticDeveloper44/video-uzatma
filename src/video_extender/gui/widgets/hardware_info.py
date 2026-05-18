@@ -30,9 +30,11 @@ class HardwareInfoWidget(QFrame):
 
         layout.addLayout(form)
 
-        # Scheduler preview for 10 jobs
+        # Scheduler preview for 10 jobs. probe_gpu=False because this is an
+        # info-only display; the real BatchRunner.run() does the functional
+        # probe at the right moment (and result is cached anyway).
         layout.addWidget(QLabel("<b>10 video için planlanan paralel worker'lar:</b>"))
-        p = plan(10, hw=hw)
+        p = plan(10, hw=hw, probe_gpu=False)
         plan_text = "\n".join(f"  • {s.label}" for s in p.slots)
         plan_label = QLabel(plan_text)
         plan_label.setStyleSheet("font-family: monospace; color: #444;")

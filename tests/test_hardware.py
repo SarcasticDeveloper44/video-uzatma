@@ -1,4 +1,6 @@
-from video_extender.core.hardware import detect
+from unittest.mock import patch
+
+from video_extender.core.hardware import _os_can_probe, detect
 
 
 class TestHardwareDetection:
@@ -25,3 +27,35 @@ class TestHardwareDetection:
         hw1 = detect()
         hw2 = detect()
         assert hw1 is hw2  # lru_cache hit
+
+
+class TestOsEncoderCompat:
+    """`_os_can_probe` must short-circuit impossible OS x encoder combos so
+    we don't waste seconds running ffmpeg probes that cannot succeed."""
+
+    def _set_platform(self, name: str):
+        return patch("video_extender.core.hardware.platform.system", return_value=name)
+
+    def test_linux_skips_videotoolbox(self) -> None:
+        with self._set_platform("Linux"):
+            assert _os_can_probe("h264_videotoolbox") is False
+            assert _os_can_probe("h264_nvenc") is True
+            assert _os_can_probe("h264_vaapi") is True
+            assert _os_can_probe("h264_qsv") is True
+
+    def test_macos_skips_nvenc_vaapi_amf_qsv(self) -> None:
+        with self._set_platform("Darwin"):
+            for inc in ("h264_nvenc", "h264_vaapi", "h264_amf", "h264_qsv",
+                        "hevc_nvenc", "hevc_vaapi"):
+                assert _os_can_probe(inc) is False, inc
+            assert _os_can_probe("h264_videotoolbox") is True
+            assert _os_can_probe("hevc_videotoolbox") is True
+
+    def test_windows_skips_vaapi(self) -> None:
+        with self._set_platform("Windows"):
+            assert _os_can_probe("h264_vaapi") is False
+            assert _os_can_probe("hevc_vaapi") is False
+            # Windows supports NVENC + AMF + QSV
+            assert _os_can_probe("h264_nvenc") is True
+            assert _os_can_probe("h264_amf") is True
+            assert _os_can_probe("h264_qsv") is True

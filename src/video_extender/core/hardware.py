@@ -119,17 +119,40 @@ def _first_render_node() -> str | None:
     return None
 
 
+# Per-OS skip lists for impossible encoder × platform combinations.
+# Probing these would either fail immediately or hang on driver bugs;
+# either way it wastes seconds per encoder at GUI startup.
+_OS_INCOMPATIBLE_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "Linux":   ("_videotoolbox",),                     # macOS-only
+    "Darwin":  ("_nvenc", "_vaapi", "_amf", "_qsv"),   # Apple → VideoToolbox
+    "Windows": ("_vaapi",),                            # Linux DRM interface
+}
+
+
+def _os_can_probe(encoder: str) -> bool:
+    """Cheap pre-filter: skip encoders that cannot possibly work on this OS."""
+    for suffix in _OS_INCOMPATIBLE_SUFFIXES.get(platform.system(), ()):
+        if encoder.endswith(suffix):
+            return False
+    return True
+
+
 @lru_cache(maxsize=64)
-def probe_encoder(encoder: str, timeout: float = 8.0) -> bool:
+def probe_encoder(encoder: str, timeout: float = 4.0) -> bool:
     """Functionally test whether `encoder` can initialize on this machine.
 
     Cached per-encoder. CPU encoders (libx*) always return True if listed.
+    OS-incompatible encoders short-circuit to False without invoking ffmpeg
+    (e.g. VAAPI on Windows, NVENC on macOS).
     """
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return False
     if encoder.startswith("lib"):
-        return True  # software encoders don't need device probe
+        return True  # software encoders don't need a device probe
+    if not _os_can_probe(encoder):
+        log.debug("encoder %s skipped (incompatible with %s)", encoder, platform.system())
+        return False
     args = _probe_args_for(encoder)
     if not args:
         return True  # unknown encoder kind — assume listed = ok

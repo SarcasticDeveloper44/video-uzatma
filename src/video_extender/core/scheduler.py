@@ -119,7 +119,8 @@ def _plan_with_override(
         slots = slots[:max(1, max_parallel_override)]
 
     plan_obj = SchedulePlan(slots=tuple(slots), total_workers=len(slots))
-    log.info("Schedule (override=%s) for %d jobs: %d workers", override, job_count, plan_obj.total_workers)
+    log_fn = log.info if probe_gpu else log.debug
+    log_fn("Schedule (override=%s) for %d jobs: %d workers", override, job_count, plan_obj.total_workers)
     return plan_obj
 
 
@@ -248,7 +249,10 @@ def plan(
         slots = slots[:max(1, max_parallel_override)]
 
     plan_obj = SchedulePlan(slots=tuple(slots), total_workers=len(slots))
-    log.info(
+    # Widget-driven preview calls (probe_gpu=False) shouldn't pollute INFO logs;
+    # only real scheduler decisions (about-to-run batch) deserve INFO.
+    log_fn = log.info if probe_gpu else log.debug
+    log_fn(
         "Schedule for %d job(s): %d GPU + %d CPU = %d workers",
         job_count,
         len(plan_obj.gpu_slots),
