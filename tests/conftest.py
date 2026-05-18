@@ -182,6 +182,24 @@ def outro_4s(fixture_dir: Path, ffmpeg_available: bool) -> Path:
 
 
 @pytest.fixture(scope="session")
+def large_1080p_30s(fixture_dir: Path, ffmpeg_available: bool) -> Path:
+    """A 30-second 1080p H.264 clip with audio — meaningful workload for
+    stress tests. Approx ~15-30 MB on disk."""
+    if not ffmpeg_available:
+        pytest.skip("ffmpeg not available")
+    p = fixture_dir / "large_1080p_30s.mp4"
+    if not p.exists():
+        _run([
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1920x1080:duration=30:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=30",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(p),
+        ])
+    return p
+
+
+@pytest.fixture(scope="session")
 def end_card_png(fixture_dir: Path, ffmpeg_available: bool) -> Path:
     if not ffmpeg_available:
         pytest.skip("ffmpeg not available")

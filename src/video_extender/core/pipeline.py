@@ -250,8 +250,14 @@ def execute_job(
 
         def _cb(ev: ProgressEvent) -> None:
             if built.target_duration > 0:
-                job.progress = min(1.0, ev.out_time_s / built.target_duration)
-            job.speed = ev.speed
+                new_progress = min(1.0, ev.out_time_s / built.target_duration)
+                # Progress is monotonic — ffmpeg's terminal "progress=end"
+                # event sometimes lacks a valid out_time_ms, which would
+                # otherwise rewind the GUI bar to 0%.
+                if new_progress > job.progress:
+                    job.progress = new_progress
+            if ev.speed > 0:
+                job.speed = ev.speed
             if ev.speed > 0 and built.target_duration > 0:
                 remaining_out_s = max(0.0, built.target_duration - ev.out_time_s)
                 job.eta_seconds = remaining_out_s / ev.speed
