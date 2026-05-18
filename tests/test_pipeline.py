@@ -280,3 +280,79 @@ class TestBatchRunner:
         statuses = sorted(j.status.value for j in jobs)
         assert "completed" in statuses
         assert "failed" in statuses
+
+
+class TestRealWorldStress:
+    """Production-shaped scenario: mixed healthy + broken files at batch scale."""
+
+    def test_20_videos_3_broken_classified_correctly(self, vertical_3s, tmp_path) -> None:
+        for i in range(17):
+            (tmp_path / f"clip_{i:02d}.mp4").write_bytes(vertical_3s.read_bytes())
+        # 3 broken files of different shapes
+        (tmp_path / "broken_garbage.mp4").write_bytes(b"this is not a video")
+        (tmp_path / "broken_empty.mp4").write_bytes(b"")
+        (tmp_path / "broken_truncated.mp4").write_bytes(
+            vertical_3s.read_bytes()[:100]  # invalid container header
+        )
+
+        sources = sorted(tmp_path.glob("*.mp4"))
+        assert len(sources) == 20
+
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        runner = BatchRunner(jobs, spec, tmp_path, resume=False)
+        runner.run()
+
+        completed = [j for j in jobs if j.status.value == "completed"]
+        failed = [j for j in jobs if j.status.value == "failed"]
+        skipped = [j for j in jobs if j.status.value == "skipped"]
+        cancelled = [j for j in jobs if j.status.value == "cancelled"]
+
+        # Exact classification: 17 healthy → completed, 3 broken → failed
+        assert len(completed) == 17, [
+            (j.source.name, j.status.value, j.error)
+            for j in jobs if j.status.value != "completed"
+        ]
+        assert len(failed) == 3
+        assert len(skipped) == 0
+        assert len(cancelled) == 0
+        # Total invariant
+        assert len(completed) + len(failed) + len(skipped) + len(cancelled) == 20
+        # Every failed job has an error message
+        assert all(j.error for j in failed)
+        # Every completed job has a real output file
+        for j in completed:
+            assert j.output is not None and j.output.exists()
+            assert j.output.stat().st_size > 0
+
+    def test_resume_on_second_run_skips_completed(self, vertical_3s, tmp_path) -> None:
+        for i in range(5):
+            (tmp_path / f"ok_{i}.mp4").write_bytes(vertical_3s.read_bytes())
+        (tmp_path / "bad.mp4").write_bytes(b"garbage")
+
+        sources = sorted(tmp_path.glob("*.mp4"))
+        spec = _spec()
+        jobs1 = build_jobs(sources, spec)
+        BatchRunner(jobs1, spec, tmp_path, resume=True).run()
+        assert sum(1 for j in jobs1 if j.status.value == "completed") == 5
+        assert sum(1 for j in jobs1 if j.status.value == "failed") == 1
+
+        jobs2 = build_jobs(sources, spec)
+        BatchRunner(jobs2, spec, tmp_path, resume=True).run()
+        assert sum(1 for j in jobs2 if j.status.value == "skipped") == 5
+        # Broken file isn't marked completed → never enters state.json → tries again
+        assert sum(1 for j in jobs2 if j.status.value == "failed") == 1
+
+    def test_completed_job_has_ffmpeg_log(self, vertical_3s, tmp_path) -> None:
+        """Per-job stderr log lands in output/logs/ for inspection."""
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        BatchRunner(jobs, spec, tmp_path, resume=False).run()
+        assert jobs[0].status.value == "completed"
+        log_dir = tmp_path / spec.output_subdir / "logs"
+        assert log_dir.is_dir()
+        logs = list(log_dir.glob("*.ffmpeg.log"))
+        assert len(logs) == 1
+        assert logs[0].stat().st_size > 0
