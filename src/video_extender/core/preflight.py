@@ -65,19 +65,26 @@ def run(
         rep.warn("Donanım hızlandırmalı GPU encoder bulunamadı; CPU (libx264) kullanılacak.")
 
     # Functional probe every GPU encoder we found in ffmpeg's encoder list.
-    any_gpu_ok = False
+    # Failures here are NOT user-actionable in the common case — most systems
+    # have only one GPU vendor and "VAAPI doesn't work on this NVIDIA system"
+    # is expected, not a problem. Only escalate to a warning if NO GPU
+    # encoder works at all. Otherwise: succinct info line.
+    functional: list[str] = []
+    nonfunctional: list[str] = []
     for enc_name, label in _GPU_PROBE_TARGETS:
         if enc_name not in hw.available_encoders:
             continue
         if probe_encoder(enc_name):
-            rep.note(f"{label} functional test: OK")
-            any_gpu_ok = True
+            functional.append(label)
         else:
-            rep.warn(
-                f"{label} ({enc_name}) listede var ama deneme encode başarısız. "
-                f"Bu encoder atlanacak; CPU veya başka bir GPU encoder kullanılacak."
-            )
-    if hw.has_gpu_encoder and not any_gpu_ok:
+            nonfunctional.append(label)
+    if functional:
+        rep.note(f"Çalışan GPU encoder'lar: {', '.join(functional)}")
+    if nonfunctional:
+        # Quiet info — not a warning. Most users have only one GPU vendor and
+        # other vendors' encoders failing to probe is expected, not a problem.
+        rep.note(f"Bu sistemde devre dışı GPU encoder'lar (normal): {', '.join(nonfunctional)}")
+    if hw.has_gpu_encoder and not functional:
         rep.warn("Hiçbir GPU encoder işlevsel değil; CPU (libx264) fallback kullanılacak.")
 
     if source_folder is not None:
