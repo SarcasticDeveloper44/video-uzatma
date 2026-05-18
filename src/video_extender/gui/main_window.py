@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
             quality=self.settings_panel.quality,
             video_codec=self.settings_panel.video_codec,
             encoder_override=self.settings_panel.encoder_override,
+            max_parallel=self.settings_panel.max_parallel,
             filters=tuple(filters),
             filter_options=opts,
             extender_options=self.settings_panel.extender_options(),
@@ -146,6 +147,7 @@ class MainWindow(QMainWindow):
         idx_enc = self.settings_panel.encoder_combo.findData(spec.encoder_override)
         if idx_enc >= 0:
             self.settings_panel.encoder_combo.setCurrentIndex(idx_enc)
+        self.settings_panel.parallel_slider.setValue(spec.max_parallel or 0)
         self.settings_panel.fade_spin.setValue(spec.audio_fade_out_seconds)
         self.settings_panel.filename_template.setText(spec.filename_template)
         self.settings_panel.intro_path.setText(spec.extender_options.get("intro", ""))
@@ -338,10 +340,24 @@ class MainWindow(QMainWindow):
             s.setValue("folder/last", str(self.folder_picker.folder))
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self._save_settings()
         if self._batch_thread is not None and self._batch_thread.isRunning():
+            running = sum(1 for j in self._jobs if j.status == JobStatus.RUNNING)
+            pending = sum(1 for j in self._jobs if j.status in (
+                JobStatus.PENDING, JobStatus.QUEUED))
+            reply = QMessageBox.question(
+                self, "İşlem devam ediyor",
+                f"{running} video şu an işleniyor, {pending} tanesi sırada.\n"
+                f"Pencereyi kapatırsan tamamlanmamış işler iptal edilecek.\n\n"
+                f"Yine de kapat?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
             self._batch_thread.cancel()
-            self._batch_thread.wait(2000)
+            self._batch_thread.wait(3000)
+        self._save_settings()
         super().closeEvent(event)
 
     # -----------------------------------------------------------------

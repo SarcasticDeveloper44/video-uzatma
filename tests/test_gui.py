@@ -49,6 +49,17 @@ class TestSettingsPanel:
         sp.codec_combo.setCurrentIndex(1)
         assert sp.video_codec == "hevc"
 
+    def test_encoder_override_default_auto(self, qapp) -> None:
+        sp = SettingsPanel()
+        assert sp.encoder_override is None  # "Otomatik" = first item
+
+    def test_max_parallel_auto_vs_explicit(self, qapp) -> None:
+        sp = SettingsPanel()
+        # Default: slider at 0 → None (auto)
+        assert sp.max_parallel is None
+        sp.parallel_slider.setValue(4)
+        assert sp.max_parallel == 4
+
     def test_extender_options_built(self, qapp) -> None:
         sp = SettingsPanel()
         sp.outro_path.setText("/x/outro.mp4")

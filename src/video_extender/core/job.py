@@ -35,6 +35,7 @@ class JobSpec:
     quality: str = "medium"            # "low" | "medium" | "high"
     video_codec: str = "h264"          # "h264" | "hevc" | "av1" | "vp9"
     encoder_override: str | None = None  # ffmpeg encoder name (e.g. "libx264") to force; None = auto-pick
+    max_parallel: int | None = None      # cap number of parallel workers; None = auto
     filters: tuple[str, ...] = ()      # filter chain names, in order
     filter_options: dict[str, Any] = field(default_factory=dict)
     extender_options: dict[str, Any] = field(default_factory=dict)

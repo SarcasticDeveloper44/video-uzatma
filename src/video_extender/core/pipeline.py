@@ -350,6 +350,7 @@ class BatchRunner:
         sched: SchedulePlan = plan(
             len(pending), hw=self.hw, codec=self.spec.video_codec,
             encoder_override=self.spec.encoder_override,
+            max_parallel_override=self.spec.max_parallel,
         )
         worker_count = sched.total_workers
 

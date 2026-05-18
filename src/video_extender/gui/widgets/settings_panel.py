@@ -4,9 +4,11 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QRadioButton, QSpinBox, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QPushButton, QRadioButton, QSlider, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
 from video_extender.core.extenders import EXTENDER_REGISTRY
@@ -110,6 +112,25 @@ class SettingsPanel(QFrame):
         self.encoder_combo.addItem("Otomatik (sistemin en hızlısı)", None)
         self._populate_encoder_choices()
         form.addRow("Encoder (zorla):", self.encoder_combo)
+
+        # Max parallel slider (0 = auto)
+        from video_extender.core.scheduler import plan
+        from video_extender.core.hardware import detect
+        try:
+            auto_workers = plan(99, hw=detect(), probe_gpu=False).total_workers
+        except Exception:
+            auto_workers = 8
+        slider_row = QHBoxLayout()
+        self.parallel_slider = QSlider(Qt.Horizontal)
+        self.parallel_slider.setRange(0, max(16, auto_workers))
+        self.parallel_slider.setValue(0)  # 0 = auto
+        self.parallel_slider.setTickPosition(QSlider.TicksBelow)
+        self.parallel_slider.setTickInterval(1)
+        self.parallel_label = QLabel(f"otomatik ({auto_workers})")
+        self.parallel_slider.valueChanged.connect(self._update_parallel_label)
+        slider_row.addWidget(self.parallel_slider, 1)
+        slider_row.addWidget(self.parallel_label)
+        form.addRow("Paralel worker:", slider_row)
 
         # Filename template
         self.filename_template = QLineEdit("{name}_extended.{ext}")
@@ -220,6 +241,18 @@ class SettingsPanel(QFrame):
     @property
     def encoder_override(self) -> str | None:
         return self.encoder_combo.currentData()
+
+    @property
+    def max_parallel(self) -> int | None:
+        v = self.parallel_slider.value()
+        return v if v > 0 else None
+
+    def _update_parallel_label(self, val: int) -> None:
+        if val == 0:
+            self.parallel_label.setText("otomatik")
+        else:
+            self.parallel_label.setText(str(val))
+        self._emit_changed()
 
     @property
     def audio_fade(self) -> float:

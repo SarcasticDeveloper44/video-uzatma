@@ -52,6 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Video codec (varsayilan: h264). HEVC ~%%30 daha kucuk dosya, ama bazi reklam platformlarinda reddedilebilir.")
     p.add_argument("--encoder", type=str, default=None,
                    help="ffmpeg encoder ismini zorla (ornek: libx264, h264_nvenc, hevc_vaapi). Bos: otomatik secim.")
+    p.add_argument("--max-parallel", type=int, default=None,
+                   help="Paralel worker sayisini sinirla (varsayilan: otomatik, donanima gore).")
     p.add_argument("--list-encoders", action="store_true",
                    help="Sistemde mevcut ve calisan encoder'lari listele, cikis.")
     p.add_argument("--filename-template", default="{name}_extended.{ext}",
@@ -208,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         quality=args.quality,
         video_codec=args.codec,
         encoder_override=args.encoder,
+        max_parallel=args.max_parallel,
         filters=tuple(filters),
         filter_options=filter_options,
         extender_options=extender_options,
