@@ -1,14 +1,16 @@
 """Main window: ties widgets + worker threads + preflight + run lifecycle."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
-    QStatusBar, QTabWidget, QVBoxLayout, QWidget,
+    QStatusBar, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from video_extender.core import config as _config
 from video_extender.core import preflight as _preflight
 from video_extender.core.job import ExtendMode, Job, JobSpec, JobStatus
 from video_extender.core.presets import PRESET_REGISTRY
@@ -93,8 +95,14 @@ class MainWindow(QMainWindow):
         self.signals.batch_finished.connect(self._on_batch_finished)
         self.signals.error.connect(self._on_error)
 
+        # Wire row-click → show ffmpeg log for failed jobs
+        self.video_list.cellDoubleClicked.connect(self._on_row_double_clicked)
+
         self._refresh_summary()
         self._run_initial_preflight()
+        # Restore the last-used spec + window geometry (after preflight so any
+        # error dialogs render correctly first).
+        self._restore_settings()
 
     # -----------------------------------------------------------------
     # Spec gathering / applying
@@ -251,6 +259,93 @@ class MainWindow(QMainWindow):
             )
         except Exception:  # noqa: BLE001
             self.summary_label.setText("")
+
+    # -----------------------------------------------------------------
+    # Settings persistence (QSettings + last-used JobSpec)
+    # -----------------------------------------------------------------
+    def _restore_settings(self) -> None:
+        s = QSettings("video-extender", "video-extender")
+        geom = s.value("window/geometry")
+        if geom is not None:
+            self.restoreGeometry(geom)
+        state = s.value("window/state")
+        if state is not None:
+            self.restoreState(state)
+        spec_json = s.value("spec/last")
+        if isinstance(spec_json, str) and spec_json:
+            try:
+                payload = json.loads(spec_json)
+                spec = _config.jobspec_from_dict(payload)
+                self._apply_spec(spec)
+            except Exception:  # noqa: BLE001
+                pass  # malformed prior settings → ignore, use defaults
+        last_folder = s.value("folder/last")
+        if isinstance(last_folder, str) and last_folder:
+            p = Path(last_folder)
+            if p.is_dir():
+                self.folder_picker._set_folder(p)
+
+    def _save_settings(self) -> None:
+        s = QSettings("video-extender", "video-extender")
+        s.setValue("window/geometry", self.saveGeometry())
+        s.setValue("window/state", self.saveState())
+        try:
+            spec = self._gather_spec()
+            s.setValue("spec/last", json.dumps(_config.jobspec_to_dict(spec), ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            pass
+        if self.folder_picker.folder is not None:
+            s.setValue("folder/last", str(self.folder_picker.folder))
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_settings()
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            self._batch_thread.cancel()
+            self._batch_thread.wait(2000)
+        super().closeEvent(event)
+
+    # -----------------------------------------------------------------
+    # Inline ffmpeg log viewer (for failed jobs)
+    # -----------------------------------------------------------------
+    def _on_row_double_clicked(self, row: int, _col: int) -> None:
+        if row < 0:
+            return
+        source = next(
+            (src for src, r in self.video_list._row_for_source.items() if r == row),
+            None,
+        )
+        if source is None:
+            return
+        job = next((j for j in self._jobs if j.source == source), None)
+        if job is not None:
+            self._show_job_log(job)
+
+    def _show_job_log(self, job: Job) -> None:
+        # Compose details: status + error + ffmpeg log (if any)
+        parts: list[str] = []
+        parts.append(f"Dosya:    {job.source}")
+        parts.append(f"Çıktı:    {job.output}")
+        parts.append(f"Durum:    {job.status.value}")
+        if job.error:
+            parts.append(f"Hata:     {job.error}")
+        parts.append("")
+        if job.stderr_log and job.stderr_log.exists():
+            try:
+                parts.append("──── ffmpeg log ────")
+                parts.append(job.stderr_log.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:
+                parts.append(f"(log okunamadı: {exc})")
+        else:
+            parts.append("(ffmpeg log mevcut değil — job henüz çalışmadı ya da hızlı çıktı.)")
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle(f"İş detayı — {job.source.name}")
+        dlg.setIcon(QMessageBox.Information)
+        dlg.setText(f"<b>{job.source.name}</b> — {job.status.value}")
+        dlg.setDetailedText("\n".join(parts))
+        # Make the detail box wider/taller
+        dlg.setStyleSheet("QTextEdit { min-width: 900px; min-height: 480px; }")
+        dlg.exec()
 
     def _run_initial_preflight(self) -> None:
         report = _preflight.run()

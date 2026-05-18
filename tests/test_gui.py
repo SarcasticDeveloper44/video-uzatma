@@ -146,3 +146,76 @@ class TestFolderPicker:
         fp._set_folder(tmp_path)
         assert fp.folder == tmp_path
         assert received == [tmp_path]
+
+
+class TestSettingsPersistence:
+    """MainWindow saves/restores last-used spec and window state via QSettings."""
+
+    def _isolated_settings(self, tmp_path):
+        """Redirect QSettings storage to a tmp dir so tests don't pollute user settings."""
+        from PySide6.QtCore import QCoreApplication, QSettings
+        QCoreApplication.setOrganizationName("video-extender-test")
+        QCoreApplication.setApplicationName("video-extender-test")
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+        return QSettings("video-extender", "video-extender")
+
+    def test_spec_roundtrip(self, qapp, tmp_path, monkeypatch) -> None:
+        self._isolated_settings(tmp_path)
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.gui.main_window import MainWindow
+
+        # 1) Configure a window and save its settings
+        w1 = MainWindow()
+        w1.settings_panel.duration_input.setValue(45)
+        w1.settings_panel.unit_combo.setCurrentText("dakika")
+        w1.settings_panel.method_combo.setCurrentIndex(
+            w1.settings_panel.method_combo.findData("black")
+        )
+        w1.settings_panel.codec_combo.setCurrentIndex(1)  # hevc
+        w1.presets_panel.combo.setCurrentIndex(
+            w1.presets_panel.combo.findData("ig_reels")
+        )
+        w1._save_settings()
+        w1.close()
+
+        # 2) New window should auto-restore
+        w2 = MainWindow()
+        w2._restore_settings()
+        assert w2.settings_panel.extend_seconds == 45 * 60
+        assert w2.settings_panel.method == "black"
+        assert w2.settings_panel.video_codec == "hevc"
+        assert w2.presets_panel.preset_key == "ig_reels"
+        w2.close()
+
+
+class TestRowDoubleClick:
+    def test_double_click_failed_job_shows_log(self, qapp, vertical_3s, tmp_path, monkeypatch) -> None:
+        """Double-clicking a row should resolve to the underlying Job."""
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+        from video_extender.gui.main_window import MainWindow
+
+        w = MainWindow()
+        media = probe_file(vertical_3s)
+        job = Job(source=vertical_3s, media=media, status=JobStatus.FAILED,
+                  error="test error")
+        w._jobs = [job]
+        w.video_list.add_job(job)
+
+        # Mock the dialog so test doesn't hang
+        shown: list = []
+        monkeypatch.setattr(w, "_show_job_log", lambda j: shown.append(j))
+
+        w._on_row_double_clicked(0, 0)
+        assert shown == [job]
+        w.close()

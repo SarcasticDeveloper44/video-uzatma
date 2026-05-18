@@ -33,3 +33,4 @@ output/
 
 # Test fixtures
 /tmp/vx_*
+.claude/
