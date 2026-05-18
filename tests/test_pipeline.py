@@ -1,0 +1,246 @@
+"""End-to-end pipeline tests: real ffmpeg, real outputs, real ffprobe verification."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from conftest import probe_codec, probe_duration
+from video_extender.core.ffmpeg import FFmpegRunner
+from video_extender.core.hardware import detect
+from video_extender.core.job import ExtendMode, Job, JobSpec
+from video_extender.core.pipeline import BatchRunner, build_jobs, execute_job
+from video_extender.core.probe import probe_file
+from video_extender.core.scheduler import WorkerKind, WorkerSlot
+from video_extender.utils.paths import ensure_output_dir, safe_output_path
+
+
+pytestmark = pytest.mark.integration
+
+
+def _spec(**overrides) -> JobSpec:
+    base = dict(
+        extend_seconds=2.0,
+        extend_mode=ExtendMode.ADD,
+        extender_name="freeze",
+        preset_name="tiktok",
+        quality="medium",
+        video_codec="h264",
+    )
+    base.update(overrides)
+    return JobSpec(**base)
+
+
+def _run_single(src: Path, spec: JobSpec, tmp_path: Path, *, encoder: str = "libx264") -> Job:
+    slot = WorkerSlot(kind=WorkerKind.CPU, encoder=encoder, threads=4,
+                      gpu_index=None, label="test-cpu")
+    media = probe_file(src)
+    out_dir = ensure_output_dir(tmp_path)
+    job = Job(source=src, media=media, spec=spec,
+              output=safe_output_path(out_dir, src, spec.filename_template))
+    return execute_job(job, slot, hw=detect(), runner=FFmpegRunner(), state_file=None)
+
+
+class TestFreezeExtender:
+    def test_add_mode(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(vertical_3s, _spec(extend_seconds=2.0), tmp_path)
+        assert job.status.value == "completed", job.error
+        assert abs(probe_duration(job.output) - 5.0) < 0.1
+
+    def test_fill_mode(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(vertical_3s, _spec(extend_mode=ExtendMode.FILL, extend_seconds=8.0), tmp_path)
+        assert job.status.value == "completed"
+        assert abs(probe_duration(job.output) - 8.0) < 0.1
+
+    def test_fill_with_source_longer(self, vertical_3s, tmp_path) -> None:
+        # source 3s, target 2s → output should stay 3s (no shrinking)
+        job = _run_single(vertical_3s, _spec(extend_mode=ExtendMode.FILL, extend_seconds=2.0), tmp_path)
+        assert job.status.value == "completed"
+        assert abs(probe_duration(job.output) - 3.0) < 0.1
+
+
+class TestExtenderVariants:
+    def test_black(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(vertical_3s, _spec(extender_name="black"), tmp_path)
+        assert job.status.value == "completed", job.error
+        assert abs(probe_duration(job.output) - 5.0) < 0.1
+
+    def test_loop(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(vertical_3s, _spec(extender_name="loop", extend_seconds=4.0), tmp_path)
+        assert job.status.value == "completed", job.error
+        assert abs(probe_duration(job.output) - 7.0) < 0.1
+
+
+class TestAspectPreservation:
+    def test_vertical_preserved(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(vertical_3s, _spec(), tmp_path)
+        _, w, h = probe_codec(job.output)
+        assert w == 720 and h == 1280
+
+    def test_horizontal_preserved(self, horizontal_3s, tmp_path) -> None:
+        job = _run_single(horizontal_3s, _spec(), tmp_path)
+        _, w, h = probe_codec(job.output)
+        assert w == 1920 and h == 1080
+
+    def test_square_preserved(self, square_3s, tmp_path) -> None:
+        job = _run_single(square_3s, _spec(), tmp_path)
+        _, w, h = probe_codec(job.output)
+        assert w == 720 and h == 720
+
+
+class TestSilentSource:
+    def test_extender_handles_no_audio(self, silent_3s, tmp_path) -> None:
+        job = _run_single(silent_3s, _spec(), tmp_path)
+        assert job.status.value == "completed", job.error
+        assert abs(probe_duration(job.output) - 5.0) < 0.1
+
+
+class TestHevcEncoder:
+    def test_libx265_produces_hevc(self, vertical_3s, tmp_path) -> None:
+        job = _run_single(
+            vertical_3s,
+            _spec(video_codec="hevc", preset_name="yt_shorts"),
+            tmp_path, encoder="libx265",
+        )
+        assert job.status.value == "completed", job.error
+        codec, _, _ = probe_codec(job.output)
+        assert codec == "hevc"
+
+
+class TestFilters:
+    def test_watermark_renders(self, vertical_3s, logo_png, tmp_path) -> None:
+        spec = _spec(
+            filters=("watermark",),
+            filter_options={
+                "watermark": {"image": str(logo_png), "position": "top-left", "opacity": 0.8}
+            },
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+
+    def test_audio_normalize(self, vertical_3s, tmp_path) -> None:
+        spec = _spec(
+            filters=("audio_normalize",),
+            filter_options={"audio_normalize": {"target_lufs": -14.0}},
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+
+    def test_aspect_convert_blur_pad(self, horizontal_3s, tmp_path) -> None:
+        spec = _spec(
+            filters=("aspect_convert",),
+            filter_options={"aspect_convert": {"target": "9:16", "mode": "blur_pad"}},
+        )
+        job = _run_single(horizontal_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+        _, w, h = probe_codec(job.output)
+        assert w == 1080 and h == 1920
+
+
+class TestIntroOutroExtender:
+    def test_full_composition(self, vertical_3s, intro_2s, outro_4s, tmp_path) -> None:
+        spec = _spec(
+            extender_name="intro_outro",
+            extend_seconds=6.0,
+            extender_options={"intro": str(intro_2s), "outro": str(outro_4s)},
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+        # 2s intro + 3s source + 4s outro = 9s
+        assert abs(probe_duration(job.output) - 9.0) < 0.1
+
+
+class TestImageCardExtenderE2E:
+    def test_image_card_appended(self, vertical_3s, end_card_png, tmp_path) -> None:
+        spec = _spec(
+            extender_name="image_card",
+            extend_seconds=5.0,
+            extender_options={"image": str(end_card_png)},
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+        # 3s source + 5s card = 8s
+        assert abs(probe_duration(job.output) - 8.0) < 0.1
+
+
+class TestSubtitleBurnE2E:
+    def test_srt_burns_in(self, vertical_3s, srt_file, tmp_path) -> None:
+        spec = _spec(
+            filters=("subtitle_burn",),
+            filter_options={"subtitle_burn": {"file": str(srt_file)}},
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+
+
+class TestColorGradeE2E:
+    def test_eq_applied(self, vertical_3s, tmp_path) -> None:
+        spec = _spec(
+            filters=("color_grade",),
+            filter_options={"color_grade": {"brightness": 0.2, "saturation": 1.5}},
+        )
+        job = _run_single(vertical_3s, spec, tmp_path)
+        assert job.status.value == "completed", job.error
+
+
+class TestBatchRunner:
+    def test_parallel_batch(self, vertical_3s, horizontal_3s, square_3s, tmp_path) -> None:
+        for f in (vertical_3s, horizontal_3s, square_3s):
+            (tmp_path / f.name).write_bytes(f.read_bytes())
+        sources = sorted(tmp_path.glob("*.mp4"))
+        assert len(sources) == 3
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        runner = BatchRunner(jobs, spec, tmp_path, resume=False)
+        runner.run()
+        completed = sum(1 for j in jobs if j.status.value == "completed")
+        assert completed == 3
+
+    def test_resume_skips_completed(self, vertical_3s, tmp_path) -> None:
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        # First run — uses unique template so no collision suffix appears
+        spec = _spec(filename_template="{name}_resume.{ext}")
+        runner1 = BatchRunner(build_jobs(sources, spec), spec, tmp_path, resume=True)
+        runner1.run()
+        # Second run — same source, same spec, output exists → skip
+        jobs2 = build_jobs(sources, spec)
+        runner2 = BatchRunner(jobs2, spec, tmp_path, resume=True)
+        runner2.run()
+        assert all(j.status.value == "skipped" for j in jobs2), \
+            [(j.name, j.status.value) for j in jobs2]
+
+    def test_resume_re_runs_when_template_differs(self, vertical_3s, tmp_path) -> None:
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec_a = _spec(filename_template="{name}_A.{ext}")
+        BatchRunner(build_jobs(sources, spec_a), spec_a, tmp_path, resume=True).run()
+        # Same source, different template → should NOT skip
+        spec_b = _spec(filename_template="{name}_B.{ext}")
+        jobs2 = build_jobs(sources, spec_b)
+        BatchRunner(jobs2, spec_b, tmp_path, resume=True).run()
+        assert all(j.status.value == "completed" for j in jobs2)
+
+    def test_resume_re_runs_when_settings_differ(self, vertical_3s, tmp_path) -> None:
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec_a = _spec(extender_name="freeze", filename_template="{name}_settings.{ext}")
+        BatchRunner(build_jobs(sources, spec_a), spec_a, tmp_path, resume=True).run()
+        # Same source + same template + different extender → re-run (overwrites)
+        spec_b = _spec(extender_name="black", filename_template="{name}_settings.{ext}")
+        jobs2 = build_jobs(sources, spec_b)
+        BatchRunner(jobs2, spec_b, tmp_path, resume=True).run()
+        assert all(j.status.value == "completed" for j in jobs2)
+
+    def test_failed_job_doesnt_kill_batch(self, vertical_3s, tmp_path) -> None:
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        (tmp_path / "broken.mp4").write_bytes(b"garbage")
+        sources = sorted(tmp_path.glob("*.mp4"))
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        runner = BatchRunner(jobs, spec, tmp_path, resume=False)
+        runner.run()
+        statuses = sorted(j.status.value for j in jobs)
+        assert "completed" in statuses
+        assert "failed" in statuses

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-extender"
+version = "0.1.0"
+description = "Batch GUI tool to extend and compress social media ad videos"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6.0",
+]
+
+[project.scripts]
+video-extender = "video_extender.cli:main"
+video-extender-gui = "video_extender.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,3 @@
+PySide6>=6.6.0
+# Test-only (pip install -r requirements-dev.txt would be cleaner but kept simple)
+# pytest, pytest-qt, pillow — only needed for `pytest` run
