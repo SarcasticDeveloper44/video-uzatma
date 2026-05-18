@@ -35,15 +35,29 @@ class MainWindow(QMainWindow):
         self._probe_thread: ProbeThread | None = None
         self._batch_thread: BatchThread | None = None
 
-        # --- Top: folder picker ---
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
 
         self.folder_picker = FolderPicker()
-        self.folder_picker.folder_changed.connect(self._on_folder_chosen)
         root_layout.addWidget(self.folder_picker)
+        root_layout.addWidget(self._build_main_splitter(), 1)
+        root_layout.addLayout(self._build_action_bar())
 
-        # --- Middle: splitter (left=tabs, right=video list) ---
+        self.setCentralWidget(central)
+        self.setStatusBar(QStatusBar(self))
+
+        self._wire_signals()
+        self._refresh_summary()
+        self._run_initial_preflight()
+        # Restore last-used spec + window geometry AFTER preflight so any
+        # error dialogs from preflight render first.
+        self._restore_settings()
+
+    # -----------------------------------------------------------------
+    # UI construction
+    # -----------------------------------------------------------------
+    def _build_main_splitter(self) -> QSplitter:
+        """Middle area: tab stack (left) + video list (right)."""
         splitter = QSplitter(Qt.Horizontal)
 
         self.tabs = QTabWidget()
@@ -52,7 +66,6 @@ class MainWindow(QMainWindow):
         self.filters_panel = FiltersPanel()
         self.profiles_panel = ProfilesPanel(self._gather_spec, self._apply_spec)
         self.hardware_widget = HardwareInfoWidget()
-
         self.tabs.addTab(self.settings_panel, "Uzatma")
         self.tabs.addTab(self.presets_panel, "Platform")
         self.tabs.addTab(self.filters_panel, "Filtreler")
@@ -64,9 +77,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.video_list)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([380, 720])
-        root_layout.addWidget(splitter, 1)
+        return splitter
 
-        # --- Bottom: action bar ---
+    def _build_action_bar(self) -> QHBoxLayout:
+        """Bottom row: summary label + Retry / Cancel / Start buttons."""
         action_row = QHBoxLayout()
         self.summary_label = QLabel("")
         self.retry_btn = QPushButton("Başarısızları Yeniden Dene")
@@ -80,14 +94,16 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.retry_btn)
         action_row.addWidget(self.cancel_btn)
         action_row.addWidget(self.start_btn)
-        root_layout.addLayout(action_row)
+        return action_row
 
-        self.setCentralWidget(central)
-        self.setStatusBar(QStatusBar(self))
+    def _wire_signals(self) -> None:
+        """Connect every widget signal to its MainWindow handler."""
+        self.folder_picker.folder_changed.connect(self._on_folder_chosen)
 
-        # Connections
         self.start_btn.clicked.connect(self._start_batch)
         self.cancel_btn.clicked.connect(self._cancel_batch)
+        self.retry_btn.clicked.connect(self._retry_failed)
+
         for panel in (self.settings_panel, self.presets_panel, self.filters_panel):
             panel.changed.connect(self._refresh_summary)
         self.profiles_panel.profile_loaded.connect(lambda _s: self._refresh_summary())
@@ -98,20 +114,10 @@ class MainWindow(QMainWindow):
         self.signals.batch_finished.connect(self._on_batch_finished)
         self.signals.error.connect(self._on_error)
 
-        # Wire row-click → show ffmpeg log for failed jobs
+        # Video list row interactions
         self.video_list.cellDoubleClicked.connect(self._on_row_double_clicked)
-        # Right-click → remove pending video from queue
         self.video_list.row_remove_requested.connect(self._on_remove_row)
-        # Right-click on failed → retry that one
         self.video_list.row_retry_requested.connect(self._on_retry_row)
-        # Retry-all-failed button
-        self.retry_btn.clicked.connect(self._retry_failed)
-
-        self._refresh_summary()
-        self._run_initial_preflight()
-        # Restore the last-used spec + window geometry (after preflight so any
-        # error dialogs render correctly first).
-        self._restore_settings()
 
     # -----------------------------------------------------------------
     # Spec gathering / applying
