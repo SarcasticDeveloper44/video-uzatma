@@ -10,7 +10,7 @@ from video_extender.core.scheduler import plan
 class HardwareInfoWidget(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(self)
         title = QLabel("<b>Tespit Edilen Donanım</b>")
         layout.addWidget(title)

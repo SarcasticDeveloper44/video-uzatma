@@ -68,17 +68,17 @@ class VideoListWidget(QTableWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(0, len(self.COLS), parent)
         self.setHorizontalHeaderLabels(self.COLS)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         h = self.horizontalHeader()
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, len(self.COLS)):
-            h.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+            h.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self._row_for_source: dict[Path, int] = {}
         # Right-click context menu for removing pending rows.
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
 
     def _on_context_menu(self, pos) -> None:
@@ -164,8 +164,8 @@ class VideoListWidget(QTableWidget):
             color = STATUS_COLOR.get(job.status)
             if color:
                 status_item.setForeground(Qt.GlobalColor.red if job.status == JobStatus.FAILED else Qt.GlobalColor.black)
-                status_item.setData(Qt.ForegroundRole, None)
-                status_item.setBackground(Qt.NoBrush)
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                status_item.setBackground(Qt.BrushStyle.NoBrush)
         bar = self.cellWidget(row, 4)
         if isinstance(bar, QProgressBar):
             pct = int(job.progress * 100)

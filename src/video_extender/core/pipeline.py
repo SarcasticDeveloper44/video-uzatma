@@ -24,7 +24,7 @@ from video_extender.core.hardware import HardwareInfo, detect
 from video_extender.core.job import ExtendMode, Job, JobSpec, JobStatus
 from video_extender.core.presets import PRESET_REGISTRY
 from video_extender.core.presets.base import PresetParams
-from video_extender.core.scheduler import SchedulePlan, WorkerKind, WorkerSlot, plan
+from video_extender.core.scheduler import SchedulePlan, WorkerSlot, plan
 from video_extender.utils import logging as _logging
 from video_extender.utils.paths import ensure_output_dir, safe_output_path
 

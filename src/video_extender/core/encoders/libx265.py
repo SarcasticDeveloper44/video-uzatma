@@ -28,7 +28,7 @@ class Libx265(EncoderBackend):
             "-preset", "medium",
             "-pix_fmt", "yuv420p",
             "-tag:v", "hvc1",  # iOS/Safari compat
-            "-x265-params", f"log-level=error",
+            "-x265-params", "log-level=error",
             "-threads", str(max(1, threads)),
         ]
         if crf is not None:

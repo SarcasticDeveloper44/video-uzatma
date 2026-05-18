@@ -100,12 +100,12 @@ def _handle_list_modes(args: argparse.Namespace) -> int | None:
     """If any --list-* flag is set, print the table and return an exit code.
     Returns None when no listing mode is active, signalling main to continue."""
     if args.list_presets:
-        for k, cls in sorted(PRESET_REGISTRY.items()):
-            print(f"  {k:14s} {cls.label}")
+        for k, preset_cls in sorted(PRESET_REGISTRY.items()):
+            print(f"  {k:14s} {preset_cls.label}")
         return 0
     if args.list_methods:
-        for k, cls in sorted(EXTENDER_REGISTRY.items()):
-            print(f"  {k:14s} {cls.label}")
+        for k, ext_cls in sorted(EXTENDER_REGISTRY.items()):
+            print(f"  {k:14s} {ext_cls.label}")
         return 0
     if args.list_encoders:
         from video_extender.core.encoders import ENCODER_REGISTRY
@@ -113,19 +113,22 @@ def _handle_list_modes(args: argparse.Namespace) -> int | None:
         hw = detect()
         print(f"{'encoder':22s} {'codec':6s} {'kind':4s} {'available':11s} {'functional':11s}")
         print("-" * 65)
-        for _name, cls in sorted(ENCODER_REGISTRY.items()):
-            avail = cls.ffmpeg_encoder in hw.available_encoders
-            functional = probe_encoder(cls.ffmpeg_encoder) if avail else False
-            print(f"{cls.ffmpeg_encoder:22s} {cls.codec:6s} {cls.kind:4s} "
+        for _name, enc_cls in sorted(ENCODER_REGISTRY.items()):
+            avail = enc_cls.ffmpeg_encoder in hw.available_encoders
+            functional = probe_encoder(enc_cls.ffmpeg_encoder) if avail else False
+            print(f"{enc_cls.ffmpeg_encoder:22s} {enc_cls.codec:6s} {enc_cls.kind:4s} "
                   f"{'YES' if avail else 'no':11s} {'YES' if functional else 'no':11s}")
         return 0
     return None
 
 
 def _print_preflight(report) -> None:
-    for line in report.info:     print(f"  • {line}")
-    for line in report.warnings: print(f"  ! {line}", file=sys.stderr)
-    for line in report.errors:   print(f"  ✗ {line}", file=sys.stderr)
+    for line in report.info:
+        print(f"  • {line}")
+    for line in report.warnings:
+        print(f"  ! {line}", file=sys.stderr)
+    for line in report.errors:
+        print(f"  ✗ {line}", file=sys.stderr)
 
 
 def _build_filters_from_args(args: argparse.Namespace) -> tuple[list[str], dict]:

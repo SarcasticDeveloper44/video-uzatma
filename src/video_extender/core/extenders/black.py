@@ -24,11 +24,9 @@ class BlackExtender(ExtenderStrategy):
         if media.video is None:
             raise ValueError(f"No video stream in {source}")
 
-        width = media.video.width
-        height = media.video.height
-        fps = media.video.fps if media.video.fps > 0 else 30.0
-        # tpad with color=black appends black frames of matching size/fps.
-        # Note: tpad keeps source SAR; color frames will match input pixel format after concat.
+        # tpad with color=black appends black frames of matching size/fps to
+        # the source. tpad keeps source SAR; color frames inherit the input
+        # pixel format on concat, so we don't need to specify dimensions here.
         video_fc = (
             f"[0:v]tpad=stop_mode=add:stop_duration={target_duration - media.duration:.3f}"
             f":color=black[vout]"

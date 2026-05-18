@@ -7,13 +7,12 @@ loop can skip them via `pytest -m "not slow"`.
 """
 from __future__ import annotations
 
-from pathlib import Path
 import time
 
 import pytest
 
 from conftest import probe_codec, probe_duration
-from video_extender.core.ffmpeg import FFmpegRunner, ProgressEvent
+from video_extender.core.ffmpeg import FFmpegRunner
 from video_extender.core.hardware import detect
 from video_extender.core.job import ExtendMode, Job, JobSpec
 from video_extender.core.pipeline import BatchRunner, build_jobs, execute_job

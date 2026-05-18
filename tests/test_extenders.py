@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from video_extender.core.extenders import EXTENDER_REGISTRY
-from video_extender.core.extenders.base import ExtenderPlan
 from video_extender.utils.ffprobe_parser import AudioStream, MediaInfo, VideoStream
 
 

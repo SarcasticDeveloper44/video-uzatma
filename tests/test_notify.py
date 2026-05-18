@@ -1,7 +1,6 @@
 """Notify is best-effort; we test that it doesn't raise and respects platform."""
 from __future__ import annotations
 
-import sys
 from unittest.mock import patch
 
 from video_extender.utils.notify import notify

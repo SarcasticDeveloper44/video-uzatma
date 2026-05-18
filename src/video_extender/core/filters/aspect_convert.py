@@ -46,7 +46,7 @@ class AspectConvertFilter(Filter):
 
         try:
             W, H = _resolve_target(target)
-        except ValueError as exc:
+        except ValueError:
             # Don't kill the chain — just skip the filter.
             return FilterFragment()
 

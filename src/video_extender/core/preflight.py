@@ -1,7 +1,6 @@
 """Preflight checks: validate environment before running a batch."""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 

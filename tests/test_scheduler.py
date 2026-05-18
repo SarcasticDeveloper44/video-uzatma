@@ -1,10 +1,9 @@
 """Scheduler tests with synthetic HardwareInfo to keep behavior deterministic."""
 from __future__ import annotations
 
-from dataclasses import replace
 
 from video_extender.core.hardware import GpuInfo, HardwareInfo
-from video_extender.core.scheduler import WorkerKind, plan
+from video_extender.core.scheduler import plan
 
 
 def _hw(*, encoders: tuple[str, ...] = ("libx264",), gpus: tuple[GpuInfo, ...] = (), cpu: int = 8) -> HardwareInfo:

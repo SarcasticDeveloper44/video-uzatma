@@ -29,9 +29,9 @@ def _isolate_qsettings(tmp_path_factory):
     settings_root = tmp_path_factory.mktemp("vx_qsettings")
     QCoreApplication.setOrganizationName("video-extender-test")
     QCoreApplication.setApplicationName("video-extender-test")
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(settings_root))
-    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(settings_root))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(settings_root))
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.SystemScope, str(settings_root))
 
 
 @pytest.fixture(autouse=True)
@@ -46,13 +46,13 @@ def _stub_modals(monkeypatch):
     except ImportError:
         return
     monkeypatch.setattr(QMessageBox, "information",
-                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "warning",
-                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "critical",
-                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
     monkeypatch.setattr(QMessageBox, "question",
-                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
 
 
 def _has(binary: str) -> bool:

@@ -23,8 +23,6 @@ class FreezeExtender(ExtenderStrategy):
     ) -> ExtenderPlan:
         # tpad clones the last frame to extend video to target duration.
         # apad pads audio with silence; afade fades audio out smoothly before silence.
-        target_ms = max(int(target_duration * 1000), int(media.duration * 1000))
-
         video_fc = f"[0:v]tpad=stop_mode=clone:stop_duration={target_duration - media.duration:.3f}[vout]"
 
         if media.audio is None:

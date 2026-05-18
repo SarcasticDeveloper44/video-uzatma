@@ -23,7 +23,7 @@ class ProfilesPanel(QFrame):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self._gather = gather_spec
         self._apply = apply_spec
 

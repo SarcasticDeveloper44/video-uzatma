@@ -16,7 +16,7 @@ class FiltersPanel(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Ek Filtreler</b>"))
 
@@ -91,16 +91,23 @@ class FiltersPanel(QFrame):
         self.cg_cb = QCheckBox("Renk düzenle")
         form.addRow(self.cg_cb)
         self.cg_brightness = QDoubleSpinBox()
-        self.cg_brightness.setRange(-1.0, 1.0); self.cg_brightness.setSingleStep(0.05)
+        self.cg_brightness.setRange(-1.0, 1.0)
+        self.cg_brightness.setSingleStep(0.05)
         form.addRow("Brightness (-1..1):", self.cg_brightness)
         self.cg_contrast = QDoubleSpinBox()
-        self.cg_contrast.setRange(0.0, 3.0); self.cg_contrast.setSingleStep(0.05); self.cg_contrast.setValue(1.0)
+        self.cg_contrast.setRange(0.0, 3.0)
+        self.cg_contrast.setSingleStep(0.05)
+        self.cg_contrast.setValue(1.0)
         form.addRow("Contrast (0..3):", self.cg_contrast)
         self.cg_saturation = QDoubleSpinBox()
-        self.cg_saturation.setRange(0.0, 3.0); self.cg_saturation.setSingleStep(0.05); self.cg_saturation.setValue(1.0)
+        self.cg_saturation.setRange(0.0, 3.0)
+        self.cg_saturation.setSingleStep(0.05)
+        self.cg_saturation.setValue(1.0)
         form.addRow("Saturation (0..3):", self.cg_saturation)
         self.cg_gamma = QDoubleSpinBox()
-        self.cg_gamma.setRange(0.1, 10.0); self.cg_gamma.setSingleStep(0.05); self.cg_gamma.setValue(1.0)
+        self.cg_gamma.setRange(0.1, 10.0)
+        self.cg_gamma.setSingleStep(0.05)
+        self.cg_gamma.setValue(1.0)
         form.addRow("Gamma (0.1..10):", self.cg_gamma)
 
         layout.addLayout(form)
@@ -113,19 +120,19 @@ class FiltersPanel(QFrame):
                   self.cg_cb, self.cg_brightness, self.cg_contrast,
                   self.cg_saturation, self.cg_gamma):
             try:
-                w.toggled.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined]
+                w.toggled.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.textChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined]
+                w.textChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.currentIndexChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined]
+                w.currentIndexChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.valueChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined]
+                w.valueChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
 

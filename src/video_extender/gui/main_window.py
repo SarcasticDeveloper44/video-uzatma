@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
-    QStatusBar, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QStatusBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from video_extender.core import config as _config
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
     # -----------------------------------------------------------------
     def _build_main_splitter(self) -> QSplitter:
         """Middle area: tab stack (left) + video list (right)."""
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.tabs = QTabWidget()
         self.settings_panel = SettingsPanel()
@@ -224,7 +224,7 @@ class MainWindow(QMainWindow):
             return
         if report.warnings:
             ok = QMessageBox.question(self, "Uyarılar", "\n".join(report.warnings) + "\n\nDevam edilsin mi?")
-            if ok != QMessageBox.Yes:
+            if ok != QMessageBox.StandardButton.Yes:
                 return
 
         # Reset progress / status on rows
@@ -367,10 +367,10 @@ class MainWindow(QMainWindow):
                 f"{running} video şu an işleniyor, {pending} tanesi sırada.\n"
                 f"Pencereyi kapatırsan tamamlanmamış işler iptal edilecek.\n\n"
                 f"Yine de kapat?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if reply != QMessageBox.Yes:
+            if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
             self._batch_thread.cancel()
@@ -461,7 +461,7 @@ class MainWindow(QMainWindow):
 
         dlg = QMessageBox(self)
         dlg.setWindowTitle(f"İş detayı — {job.source.name}")
-        dlg.setIcon(QMessageBox.Information)
+        dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setText(f"<b>{job.source.name}</b> — {job.status.value}")
         dlg.setDetailedText("\n".join(parts))
         # Make the detail box wider/taller

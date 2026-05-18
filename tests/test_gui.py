@@ -49,6 +49,25 @@ class TestSettingsPanel:
         sp.codec_combo.setCurrentIndex(1)
         assert sp.video_codec == "hevc"
 
+    def test_default_codec_is_most_compatible(self, qapp) -> None:
+        """Fresh-install default MUST be H.264 (universal compatibility).
+        HEVC requires opt-in via dropdown or --codec hevc."""
+        sp = SettingsPanel()
+        # First combo item is the default
+        assert sp.codec_combo.itemData(0) == "h264"
+        assert "uyumlu" in sp.codec_combo.itemText(0).lower()
+        assert sp.video_codec == "h264"
+
+    def test_default_quality_is_medium(self, qapp) -> None:
+        sp = SettingsPanel()
+        assert sp.quality == "medium"
+
+    def test_default_encoder_override_is_auto(self, qapp) -> None:
+        """Default encoder is 'Otomatik' → None → scheduler auto-picks."""
+        sp = SettingsPanel()
+        assert sp.encoder_override is None
+        assert sp.encoder_combo.itemData(0) is None
+
     def test_encoder_override_default_auto(self, qapp) -> None:
         sp = SettingsPanel()
         assert sp.encoder_override is None  # "Otomatik" = first item
@@ -148,9 +167,12 @@ class TestVideoList:
 
         vl = VideoListWidget()
         media = probe_file(vertical_3s)
-        a = tmp_path / "a.mp4"; a.write_bytes(vertical_3s.read_bytes())
-        b = tmp_path / "b.mp4"; b.write_bytes(vertical_3s.read_bytes())
-        c = tmp_path / "c.mp4"; c.write_bytes(vertical_3s.read_bytes())
+        a = tmp_path / "a.mp4"
+        a.write_bytes(vertical_3s.read_bytes())
+        b = tmp_path / "b.mp4"
+        b.write_bytes(vertical_3s.read_bytes())
+        c = tmp_path / "c.mp4"
+        c.write_bytes(vertical_3s.read_bytes())
         for p in (a, b, c):
             vl.add_job(Job(source=p, media=media, status=JobStatus.PENDING))
         assert vl.rowCount() == 3
@@ -182,8 +204,10 @@ class TestProbeThread:
         from video_extender.gui.workers import BatchSignals, ProbeThread
 
         # Stage 2 copies so ProbeThread has work to do
-        a = tmp_path / "a.mp4"; a.write_bytes(vertical_3s.read_bytes())
-        b = tmp_path / "b.mp4"; b.write_bytes(vertical_3s.read_bytes())
+        a = tmp_path / "a.mp4"
+        a.write_bytes(vertical_3s.read_bytes())
+        b = tmp_path / "b.mp4"
+        b.write_bytes(vertical_3s.read_bytes())
 
         signals = BatchSignals()
         spec = JobSpec(extend_seconds=1.0, extend_mode=ExtendMode.ADD,

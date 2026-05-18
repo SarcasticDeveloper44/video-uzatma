@@ -46,7 +46,7 @@ class ImageCardExtender(ExtenderStrategy):
             # No extension needed — just re-encode source.
             video_fc = f"[0:v]setsar=1,fps={fps},format=yuv420p[vout]"
             if media.audio:
-                audio_fc = f"[0:a]aresample=44100[aout]"
+                audio_fc = "[0:a]aresample=44100[aout]"
             else:
                 audio_fc = (
                     f"anullsrc=channel_layout=stereo:sample_rate=44100,"

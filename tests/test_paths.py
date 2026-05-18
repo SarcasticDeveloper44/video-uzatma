@@ -2,7 +2,6 @@ from pathlib import Path
 
 from video_extender.utils.paths import (
     discover_videos, ensure_output_dir, is_video, safe_output_path,
-    VIDEO_EXTENSIONS,
 )
 
 

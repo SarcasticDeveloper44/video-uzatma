@@ -24,7 +24,7 @@ class SettingsPanel(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Uzatma Ayarları</b>"))
 
@@ -121,10 +121,10 @@ class SettingsPanel(QFrame):
         except Exception:
             auto_workers = 8
         slider_row = QHBoxLayout()
-        self.parallel_slider = QSlider(Qt.Horizontal)
+        self.parallel_slider = QSlider(Qt.Orientation.Horizontal)
         self.parallel_slider.setRange(0, max(16, auto_workers))
         self.parallel_slider.setValue(0)  # 0 = auto
-        self.parallel_slider.setTickPosition(QSlider.TicksBelow)
+        self.parallel_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.parallel_slider.setTickInterval(1)
         self.parallel_label = QLabel(f"otomatik ({auto_workers})")
         self.parallel_slider.valueChanged.connect(self._update_parallel_label)
@@ -145,19 +145,19 @@ class SettingsPanel(QFrame):
                   self.fade_spin, self.filename_template,
                   self.add_radio, self.fill_radio):
             try:
-                w.valueChanged.connect(self._emit_changed)  # type: ignore[attr-defined]
+                w.valueChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.currentIndexChanged.connect(self._emit_changed)  # type: ignore[attr-defined]
+                w.currentIndexChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.textChanged.connect(self._emit_changed)  # type: ignore[attr-defined]
+                w.textChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
             try:
-                w.toggled.connect(self._emit_changed)  # type: ignore[attr-defined]
+                w.toggled.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
             except AttributeError:
                 pass
 
@@ -203,7 +203,12 @@ class SettingsPanel(QFrame):
             self.encoder_combo.addItem(label, enc)
             if not functional:
                 idx = self.encoder_combo.count() - 1
-                self.encoder_combo.model().item(idx).setEnabled(False)
+                # QComboBox's underlying model is a QStandardItemModel; item()
+                # exists at runtime but mypy sees the abstract base.
+                model = self.encoder_combo.model()
+                item = model.item(idx)  # type: ignore[attr-defined]
+                if item is not None:
+                    item.setEnabled(False)
 
     def _pick_intro(self) -> None:
         f, _ = QFileDialog.getOpenFileName(self, "Intro klip", str(Path.home()),

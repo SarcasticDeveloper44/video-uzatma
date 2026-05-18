@@ -12,15 +12,16 @@ class PresetsPanel(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Platform Preset</b>"))
 
         form = QFormLayout()
         self.combo = QComboBox()
         # Group: working presets first, then scaffolds.
-        working = []
-        scaffold = []
+        from video_extender.core.presets.base import PlatformPreset
+        working: list[tuple[str, type[PlatformPreset]]] = []
+        scaffold: list[tuple[str, type[PlatformPreset]]] = []
         for k, cls in PRESET_REGISTRY.items():
             (scaffold if "iskelet" in cls.label.lower() else working).append((k, cls))
         for k, cls in sorted(working, key=lambda kv: kv[1].label):

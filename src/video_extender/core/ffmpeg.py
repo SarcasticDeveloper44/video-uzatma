@@ -87,12 +87,15 @@ class FFmpegRunner:
         ffprobe_path: str | None = None,
     ) -> None:
         hw = detect()
-        self.ffmpeg = ffmpeg_path or hw.ffmpeg_path
-        self.ffprobe = ffprobe_path or hw.ffprobe_path
-        if not self.ffmpeg:
+        ffmpeg = ffmpeg_path or hw.ffmpeg_path
+        ffprobe = ffprobe_path or hw.ffprobe_path
+        if not ffmpeg:
             raise FileNotFoundError("ffmpeg binary not found on PATH")
-        if not self.ffprobe:
+        if not ffprobe:
             raise FileNotFoundError("ffprobe binary not found on PATH")
+        # Type-narrowed in local scope; assign to typed attributes.
+        self.ffmpeg: str = ffmpeg
+        self.ffprobe: str = ffprobe
         self._proc: subprocess.Popen[bytes] | None = None
         self._cancelled = False
         self._lock = threading.Lock()
@@ -180,6 +183,15 @@ class FFmpegRunner:
         finally:
             proc.wait()
             t.join(timeout=1.0)
+            # Explicitly close the pipe file descriptors. Popen.__del__ would
+            # eventually close them but we'd leak fds + emit ResourceWarning
+            # during the batch (one leak per encode × 50 videos = exhaustion).
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
         stderr_log = "\n".join(stderr_lines)
         if stderr_log_path is not None:
