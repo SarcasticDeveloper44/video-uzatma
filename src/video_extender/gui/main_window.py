@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
             preset_name=preset_key,
             quality=self.settings_panel.quality,
             video_codec=self.settings_panel.video_codec,
+            encoder_override=self.settings_panel.encoder_override,
             filters=tuple(filters),
             filter_options=opts,
             extender_options=self.settings_panel.extender_options(),
@@ -142,6 +143,9 @@ class MainWindow(QMainWindow):
         idx_codec = self.settings_panel.codec_combo.findData(spec.video_codec)
         if idx_codec >= 0:
             self.settings_panel.codec_combo.setCurrentIndex(idx_codec)
+        idx_enc = self.settings_panel.encoder_combo.findData(spec.encoder_override)
+        if idx_enc >= 0:
+            self.settings_panel.encoder_combo.setCurrentIndex(idx_enc)
         self.settings_panel.fade_spin.setValue(spec.audio_fade_out_seconds)
         self.settings_panel.filename_template.setText(spec.filename_template)
         self.settings_panel.intro_path.setText(spec.extender_options.get("intro", ""))
@@ -231,6 +235,42 @@ class MainWindow(QMainWindow):
 
     def _on_job_updated(self, job: Job) -> None:
         self.video_list.update_job(job)
+        self._update_batch_eta()
+
+    def _update_batch_eta(self) -> None:
+        """Aggregate per-job ETA into an overall batch ETA shown in the status bar."""
+        if not self._jobs:
+            return
+        running = [j for j in self._jobs if j.status == JobStatus.RUNNING]
+        pending = [j for j in self._jobs if j.status in (JobStatus.PENDING, JobStatus.QUEUED)]
+        if not running and not pending:
+            return
+        # Running jobs contribute their reported ETA.
+        # Pending jobs estimate using mean speed of running jobs (or 1x fallback)
+        # and their own source duration scaled by extender (we use target_duration if known
+        # else fall back to source media duration).
+        speeds = [j.speed for j in running if j.speed > 0]
+        mean_speed = (sum(speeds) / len(speeds)) if speeds else 1.0
+        running_eta = sum(j.eta_seconds for j in running) / max(1, len(running))
+        pending_remaining = 0.0
+        for j in pending:
+            est_target = j.target_duration if j.target_duration > 0 else (
+                j.media.duration if j.media else 0.0
+            )
+            pending_remaining += est_target / mean_speed
+        # Pending work runs in parallel across available worker slots, but a rough
+        # serial sum / num_workers is a decent estimate. We approximate with the
+        # number of running jobs as proxy for active workers.
+        n_workers = max(1, len(running))
+        eta_total = running_eta + (pending_remaining / n_workers)
+        from video_extender.gui.widgets.video_list import _format_eta
+        completed = sum(1 for j in self._jobs if j.status in (
+            JobStatus.COMPLETED, JobStatus.SKIPPED, JobStatus.FAILED, JobStatus.CANCELLED))
+        total = len(self._jobs)
+        self.statusBar().showMessage(
+            f"{completed}/{total} bitti · "
+            f"hız ~{mean_speed:.1f}x · toplam kalan ~{_format_eta(eta_total)}"
+        )
 
     def _on_batch_started(self, count: int) -> None:
         self.statusBar().showMessage(f"{count} video işleniyor…")

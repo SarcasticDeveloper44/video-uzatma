@@ -156,3 +156,29 @@ class TestSchedulerOverride:
             cpu=32,
         ), max_parallel_override=2, probe_gpu=False)
         assert p.total_workers == 2
+
+
+class TestEncoderOverride:
+    def test_force_libx265_uses_cpu(self) -> None:
+        p = plan(3, hw=_hw(
+            encoders=("h264_nvenc", "libx264", "libx265"),
+            gpus=(_nvidia_gpu(),),
+            cpu=32,
+        ), encoder_override="libx265", probe_gpu=False)
+        # All slots should be CPU libx265 (no NVENC even though available)
+        assert all(s.kind.value == "cpu" for s in p.slots)
+        assert all(s.encoder == "libx265" for s in p.slots)
+
+    def test_force_h264_nvenc(self) -> None:
+        p = plan(5, hw=_hw(
+            encoders=("h264_nvenc", "libx264"),
+            gpus=(_nvidia_gpu(),),
+        ), encoder_override="h264_nvenc", probe_gpu=False)
+        assert all(s.encoder == "h264_nvenc" for s in p.slots)
+        assert all(s.kind.value == "gpu" for s in p.slots)
+
+    def test_unavailable_override_falls_back(self) -> None:
+        # User forces hevc_nvenc but only libx264 is available
+        p = plan(2, hw=_hw(encoders=("libx264",)),
+                 encoder_override="hevc_nvenc", probe_gpu=False)
+        assert all(s.encoder == "libx264" for s in p.slots)

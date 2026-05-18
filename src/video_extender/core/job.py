@@ -33,7 +33,8 @@ class JobSpec:
     extender_name: str                 # e.g. "freeze", "black", "loop"
     preset_name: str                   # e.g. "tiktok", "meta_reels"
     quality: str = "medium"            # "low" | "medium" | "high"
-    video_codec: str = "h264"          # "h264" | "hevc" (more in future)
+    video_codec: str = "h264"          # "h264" | "hevc" | "av1" | "vp9"
+    encoder_override: str | None = None  # ffmpeg encoder name (e.g. "libx264") to force; None = auto-pick
     filters: tuple[str, ...] = ()      # filter chain names, in order
     filter_options: dict[str, Any] = field(default_factory=dict)
     extender_options: dict[str, Any] = field(default_factory=dict)
@@ -53,6 +54,9 @@ class Job:
     error: str | None = None
     stderr_log: Path | None = None
     target_duration: float = 0.0       # computed final duration (s)
+    speed: float = 0.0                 # ffmpeg speed multiplier (e.g. 10.2x)
+    eta_seconds: float = 0.0           # estimated wall-clock remaining for THIS job
+    worker_label: str = ""             # which worker slot is processing this
 
     @property
     def name(self) -> str:

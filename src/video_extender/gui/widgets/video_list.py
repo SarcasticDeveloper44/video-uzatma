@@ -11,6 +11,18 @@ from PySide6.QtWidgets import (
 from video_extender.core.job import Job, JobStatus
 from video_extender.utils.duration import format_duration
 
+
+def _format_eta(seconds: float) -> str:
+    if seconds <= 0 or seconds > 86400:
+        return "—"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m"
+
 STATUS_TEXT = {
     JobStatus.PENDING:   "Bekliyor",
     JobStatus.PROBING:   "İnceleniyor",
@@ -35,7 +47,7 @@ class VideoListWidget(QTableWidget):
     """Table showing each Job's status and progress."""
     row_open_log = Signal(Path)
 
-    COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme"]
+    COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Worker"]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(0, len(self.COLS), parent)
@@ -79,6 +91,9 @@ class VideoListWidget(QTableWidget):
         bar.setValue(0)
         bar.setTextVisible(True)
         self.setCellWidget(row, 4, bar)
+        self.setItem(row, 5, QTableWidgetItem("—"))   # Speed
+        self.setItem(row, 6, QTableWidgetItem("—"))   # ETA
+        self.setItem(row, 7, QTableWidgetItem(""))    # Worker
 
     def update_job(self, job: Job) -> None:
         row = self._row_for_source.get(job.source)
@@ -99,3 +114,20 @@ class VideoListWidget(QTableWidget):
         if isinstance(bar, QProgressBar):
             pct = int(job.progress * 100)
             bar.setValue(pct)
+        # Speed / ETA / Worker
+        speed_item = self.item(row, 5)
+        if speed_item:
+            speed_item.setText(f"{job.speed:.1f}x" if job.speed > 0 else "—")
+        eta_item = self.item(row, 6)
+        if eta_item:
+            if job.status == JobStatus.RUNNING:
+                eta_item.setText(_format_eta(job.eta_seconds))
+            elif job.status == JobStatus.COMPLETED:
+                eta_item.setText("✓")
+            elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                eta_item.setText("—")
+            elif job.status == JobStatus.SKIPPED:
+                eta_item.setText("atlandı")
+        worker_item = self.item(row, 7)
+        if worker_item and job.worker_label:
+            worker_item.setText(job.worker_label)

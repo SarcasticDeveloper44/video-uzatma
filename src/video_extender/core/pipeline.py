@@ -224,6 +224,7 @@ def execute_job(
     log_dir: Path | None = None,
 ) -> Job:
     job.status = JobStatus.RUNNING
+    job.worker_label = slot.label
     if on_progress:
         on_progress(job)
 
@@ -244,6 +245,12 @@ def execute_job(
         def _cb(ev: ProgressEvent) -> None:
             if built.target_duration > 0:
                 job.progress = min(1.0, ev.out_time_s / built.target_duration)
+            job.speed = ev.speed
+            if ev.speed > 0 and built.target_duration > 0:
+                remaining_out_s = max(0.0, built.target_duration - ev.out_time_s)
+                job.eta_seconds = remaining_out_s / ev.speed
+            else:
+                job.eta_seconds = 0.0
             if on_progress:
                 on_progress(job)
 
@@ -340,7 +347,10 @@ class BatchRunner:
         if not pending:
             return self.jobs
 
-        sched: SchedulePlan = plan(len(pending), hw=self.hw, codec=self.spec.video_codec)
+        sched: SchedulePlan = plan(
+            len(pending), hw=self.hw, codec=self.spec.video_codec,
+            encoder_override=self.spec.encoder_override,
+        )
         worker_count = sched.total_workers
 
         with self._lock:

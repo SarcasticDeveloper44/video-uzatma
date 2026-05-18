@@ -64,6 +64,65 @@ _CPU_ENCODER_PREFERENCE: dict[str, tuple[str, ...]] = {
 }
 
 
+_GPU_SUFFIXES = ("_nvenc", "_qsv", "_vaapi", "_amf", "_videotoolbox")
+
+
+def _is_gpu_encoder(name: str) -> bool:
+    return any(name.endswith(s) for s in _GPU_SUFFIXES)
+
+
+def _plan_with_override(
+    job_count: int,
+    hw: HardwareInfo,
+    override: str,
+    probe_gpu: bool,
+    max_parallel_override: int | None,
+) -> SchedulePlan:
+    """Build a plan where every worker uses the user-forced encoder."""
+    if override not in hw.available_encoders:
+        log.warning("encoder override '%s' not available; falling back to CPU libx264", override)
+        override = "libx264"
+    if _is_gpu_encoder(override):
+        if probe_gpu and not probe_encoder(override):
+            log.warning("encoder override '%s' probe failed; falling back to CPU libx264", override)
+            override = "libx264"
+
+    slots: list[WorkerSlot] = []
+    if _is_gpu_encoder(override):
+        # Find the GPU that supports this encoder
+        gpu_idx = 0
+        for idx, gpu in enumerate(hw.gpus):
+            if override in gpu.encoders:
+                gpu_idx = idx
+                break
+        sessions = NVENC_SESSIONS_PER_GPU if override.endswith("_nvenc") else 1
+        sessions = min(sessions, job_count)
+        for s in range(sessions):
+            label_suffix = f"/session{s+1}" if sessions > 1 else ""
+            slots.append(WorkerSlot(
+                kind=WorkerKind.GPU, encoder=override, threads=2,
+                gpu_index=gpu_idx,
+                label=f"GPU#{gpu_idx}{label_suffix} ({override}) [override]",
+            ))
+    else:
+        cpu_cap = max(1, hw.cpu_count // 4)
+        cpu_cap = min(cpu_cap, max(1, job_count))
+        threads_each = _threads_per_cpu_job(hw, cpu_cap)
+        for i in range(cpu_cap):
+            slots.append(WorkerSlot(
+                kind=WorkerKind.CPU, encoder=override, threads=threads_each,
+                gpu_index=None,
+                label=f"CPU#{i+1} ({override} x{threads_each}) [override]",
+            ))
+
+    if max_parallel_override is not None:
+        slots = slots[:max(1, max_parallel_override)]
+
+    plan_obj = SchedulePlan(slots=tuple(slots), total_workers=len(slots))
+    log.info("Schedule (override=%s) for %d jobs: %d workers", override, job_count, plan_obj.total_workers)
+    return plan_obj
+
+
 def _pick_gpu_encoder(encoders: frozenset[str], codec: str, *, probe: bool = True) -> str | None:
     """Pick the first GPU encoder for `codec` that is both LISTED and
     FUNCTIONALLY able to initialize (when probe=True).
@@ -100,17 +159,26 @@ def plan(
     max_parallel_override: int | None = None,
     codec: str = "h264",
     probe_gpu: bool = True,
+    encoder_override: str | None = None,
 ) -> SchedulePlan:
     """Build an optimal slot plan for `job_count` jobs.
 
     `codec` selects which encoders to use ("h264", "hevc", "av1"). Falls back
     gracefully: if no GPU encoder for the requested codec, runs CPU-only.
+
+    `encoder_override` forces a specific ffmpeg encoder (e.g. "libx265",
+    "h264_nvenc"). Auto codec/GPU detection is bypassed. If the override is
+    a GPU encoder, all slots are GPU; if it's a CPU encoder, all slots are CPU.
+
     `probe_gpu` (default True) verifies each GPU encoder can actually init
     before allocating slots for it. Pass False for unit tests against
     synthetic HardwareInfo.
     """
     hw = hw or detect()
     slots: list[WorkerSlot] = []
+
+    if encoder_override:
+        return _plan_with_override(job_count, hw, encoder_override, probe_gpu, max_parallel_override)
 
     cpu_encoder = _pick_cpu_encoder(hw.available_encoders, codec)
 

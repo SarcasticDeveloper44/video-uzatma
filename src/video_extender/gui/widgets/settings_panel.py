@@ -105,6 +105,12 @@ class SettingsPanel(QFrame):
         self.codec_combo.addItem("HEVC (~%30 daha küçük; bazı reklam platformlarında reddedilebilir)", "hevc")
         form.addRow("Codec:", self.codec_combo)
 
+        # Encoder override
+        self.encoder_combo = QComboBox()
+        self.encoder_combo.addItem("Otomatik (sistemin en hızlısı)", None)
+        self._populate_encoder_choices()
+        form.addRow("Encoder (zorla):", self.encoder_combo)
+
         # Filename template
         self.filename_template = QLineEdit("{name}_extended.{ext}")
         self.filename_template.setToolTip("Token'lar: {name}, {ext}, {duration}, {preset}")
@@ -114,8 +120,9 @@ class SettingsPanel(QFrame):
         layout.addStretch(1)
 
         for w in (self.duration_input, self.unit_combo, self.method_combo,
-                  self.quality_combo, self.codec_combo, self.fade_spin,
-                  self.filename_template, self.add_radio, self.fill_radio):
+                  self.quality_combo, self.codec_combo, self.encoder_combo,
+                  self.fade_spin, self.filename_template,
+                  self.add_radio, self.fill_radio):
             try:
                 w.valueChanged.connect(self._emit_changed)  # type: ignore[attr-defined]
             except AttributeError:
@@ -135,6 +142,30 @@ class SettingsPanel(QFrame):
 
     def _emit_changed(self, *args: object) -> None:
         self.changed.emit()
+
+    def _populate_encoder_choices(self) -> None:
+        """Add to the encoder dropdown only encoders that are listed AND functional."""
+        from video_extender.core.encoders import ENCODER_REGISTRY
+        from video_extender.core.hardware import detect, probe_encoder
+        hw = detect()
+        # Group: working GPU encoders first, then CPU, then unavailable greyed-out.
+        gpu_avail, cpu_avail, unavailable = [], [], []
+        for name, cls in sorted(ENCODER_REGISTRY.items(), key=lambda kv: (kv[1].kind, kv[0])):
+            listed = cls.ffmpeg_encoder in hw.available_encoders
+            functional = listed and probe_encoder(cls.ffmpeg_encoder)
+            label = cls.label + ("" if functional else " [çalışmıyor]")
+            entry = (cls.ffmpeg_encoder, label, functional)
+            if not listed:
+                unavailable.append(entry)
+            elif cls.kind == "gpu":
+                gpu_avail.append(entry)
+            else:
+                cpu_avail.append(entry)
+        for enc, label, functional in gpu_avail + cpu_avail:
+            self.encoder_combo.addItem(label, enc)
+            if not functional:
+                idx = self.encoder_combo.count() - 1
+                self.encoder_combo.model().item(idx).setEnabled(False)
 
     def _pick_intro(self) -> None:
         f, _ = QFileDialog.getOpenFileName(self, "Intro klip", str(Path.home()),
@@ -185,6 +216,10 @@ class SettingsPanel(QFrame):
     @property
     def video_codec(self) -> str:
         return self.codec_combo.currentData() or "h264"
+
+    @property
+    def encoder_override(self) -> str | None:
+        return self.encoder_combo.currentData()
 
     @property
     def audio_fade(self) -> float:

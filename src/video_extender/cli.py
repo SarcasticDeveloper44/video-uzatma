@@ -50,6 +50,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quality", "-q", choices=["low", "medium", "high"], default="medium")
     p.add_argument("--codec", "-c", choices=["h264", "hevc"], default="h264",
                    help="Video codec (varsayilan: h264). HEVC ~%%30 daha kucuk dosya, ama bazi reklam platformlarinda reddedilebilir.")
+    p.add_argument("--encoder", type=str, default=None,
+                   help="ffmpeg encoder ismini zorla (ornek: libx264, h264_nvenc, hevc_vaapi). Bos: otomatik secim.")
+    p.add_argument("--list-encoders", action="store_true",
+                   help="Sistemde mevcut ve calisan encoder'lari listele, cikis.")
     p.add_argument("--filename-template", default="{name}_extended.{ext}",
                    help="Çıktı isim şablonu. Tokens: {name}, {ext}, {duration}, {preset}.")
     p.add_argument("--audio-fade", type=float, default=1.5,
@@ -103,6 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_methods:
         for k, cls in sorted(EXTENDER_REGISTRY.items()):
             print(f"  {k:14s} {cls.label}")
+        return 0
+    if args.list_encoders:
+        from video_extender.core.encoders import ENCODER_REGISTRY
+        from video_extender.core.hardware import detect, probe_encoder
+        hw = detect()
+        print(f"{'encoder':22s} {'codec':6s} {'kind':4s} {'available':11s} {'functional':11s}")
+        print("-" * 65)
+        for name, cls in sorted(ENCODER_REGISTRY.items()):
+            avail = cls.ffmpeg_encoder in hw.available_encoders
+            functional = probe_encoder(cls.ffmpeg_encoder) if avail else False
+            print(f"{cls.ffmpeg_encoder:22s} {cls.codec:6s} {cls.kind:4s} "
+                  f"{'YES' if avail else 'no':11s} {'YES' if functional else 'no':11s}")
         return 0
 
     if args.folder is None:
@@ -191,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         preset_name=args.preset,
         quality=args.quality,
         video_codec=args.codec,
+        encoder_override=args.encoder,
         filters=tuple(filters),
         filter_options=filter_options,
         extender_options=extender_options,
