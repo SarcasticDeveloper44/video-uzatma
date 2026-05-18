@@ -265,9 +265,10 @@ Real video fixture'ları `ffmpeg lavfi` ile üretilir — placeholder/demo data 
 ## Test stat
 
 ```
-~193 test
+~197 test (193 fast + 4 slow)
 - tests/test_*.py birim testleri (filter, encoder, preset, hardware, scheduler)
 - tests/test_pipeline.py @pytest.mark.integration uçtan uca ffmpeg
+- tests/test_stress.py @pytest.mark.slow 1080p 30s yük testleri
 - tests/test_gui.py @pytest.mark.gui PySide6 widget'ları
 - tests/test_cli.py argparse + main()
 ```

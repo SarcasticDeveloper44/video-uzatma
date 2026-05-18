@@ -187,7 +187,7 @@ class FiltersPanel(QFrame):
             }
         if self.final_fade_cb.isChecked():
             names.append("audio_fade_out")
-            opts["audio_fade_out"] = {"duration": 1.5, "total_duration": 0}
+            opts["audio_fade_out"] = {"duration": 1.5}  # total_duration filled by pipeline
         if self.strip_cb.isChecked():
             names.append("metadata_strip")
         return names, opts

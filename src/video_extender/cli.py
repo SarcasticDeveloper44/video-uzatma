@@ -161,10 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         }
     if args.fade_out_final:
         filters.append("audio_fade_out")
-        filter_options["audio_fade_out"] = {
-            "duration": args.audio_fade,
-            "total_duration": 0,  # filled per-job at command-build time (TODO improvement)
-        }
+        # total_duration left unset — pipeline fills it per-job from target_duration.
+        filter_options["audio_fade_out"] = {"duration": args.audio_fade}
     if args.aspect:
         # Aspect convert runs FIRST so subsequent filters operate on the new resolution.
         filters.insert(0, "aspect_convert")

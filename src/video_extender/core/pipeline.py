@@ -6,7 +6,6 @@ Per-job entry:   build_job_command + execute_job.
 from __future__ import annotations
 
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +19,7 @@ from video_extender.core.extenders import EXTENDER_REGISTRY
 from video_extender.core.extenders.base import ExtenderPlan, ExtenderStrategy
 from video_extender.core.ffmpeg import FFmpegResult, FFmpegRunner, ProgressEvent
 from video_extender.core.filters import FILTER_REGISTRY
-from video_extender.core.filters.base import Filter, FilterChain, FilterFragment
+from video_extender.core.filters.base import FilterChain, FilterFragment
 from video_extender.core.hardware import HardwareInfo, detect
 from video_extender.core.job import ExtendMode, Job, JobSpec, JobStatus
 from video_extender.core.presets import PRESET_REGISTRY
@@ -445,22 +444,3 @@ def build_jobs(sources: list[Path], spec: JobSpec) -> list[Job]:
             j = Job(source=src, spec=spec, status=JobStatus.FAILED, error=f"probe failed: {exc}")
             jobs.append(j)
     return jobs
-
-
-# Re-export for convenience
-def progress_throttle(min_interval_s: float = 0.25) -> Callable[[ProgressFn], ProgressFn]:
-    """Decorator: limit a progress callback to fire at most every `min_interval_s`."""
-    def wrap(fn: ProgressFn) -> ProgressFn:
-        last_call: dict[int, float] = {}
-
-        def wrapped(job: Job) -> None:
-            now = time.monotonic()
-            jid = id(job)
-            last = last_call.get(jid, 0.0)
-            # always fire on terminal states
-            terminal = job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED)
-            if terminal or now - last >= min_interval_s:
-                last_call[jid] = now
-                fn(job)
-        return wrapped
-    return wrap

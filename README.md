@@ -94,14 +94,22 @@ Bayraklar: `--add <süre>` veya `--target <süre>` (örn: `45s`, `30m`, `1h30m`)
 - **Preflight check:** ffmpeg / NVENC / output yazılabilirlik kontrolü + functional NVENC encode testi
 - **Drag & drop:** klasörü pencereye sürükle
 - **JSON profiller:** kaydet/yükle (Profiller tab'ı), tüm spec alanları korunur
-- **Sistem bildirimi:** batch bitince notify-send
+- **Settings persistence:** son kullanılan ayarlar + pencere geometrisi + son klasör otomatik korunur (QSettings)
+- **Canlı ETA + hız:** her satırda speed (NVENC ~10x), ETA, atanan worker (GPU#0 / CPU#3). Status bar'da toplam batch ETA.
+- **Encoder override:** GUI dropdown veya CLI `--encoder libx264` ile zorla; aksi halde scheduler otomatik en hızlısını seçer.
+- **Paralel worker kontrolü:** GUI slider veya CLI `--max-parallel N` (0/eksik = otomatik).
+- **Failed-job retry:** batch sonunda "Başarısızları Yeniden Dene" butonu; tek satır için sağ-tık menüsünden retry. Pending satırlarda sağ-tık "Listeden çıkar".
+- **Output filesize kolonu:** job tamamlanınca dosya boyutu KB/MB/GB olarak görünür.
+- **Inline ffmpeg log viewer:** failed satıra çift tıkla → stderr log popup.
+- **Sistem bildirimi:** batch bitince Linux notify-send / macOS osascript / Windows PowerShell toast.
 
 ### Test paketi
 
 ```bash
-.venv/bin/pytest             # 134 test
-.venv/bin/pytest -m "not integration"  # birim testler, ffmpeg gerekmez
-.venv/bin/pytest -m gui      # sadece GUI testleri
+.venv/bin/pytest             # 193 hızlı test (~28sn)
+.venv/bin/pytest -m "not slow"  # slow integration testler hariç (aynı: hızlı)
+.venv/bin/pytest                # tümü dahil 197 test (~65sn)
+.venv/bin/pytest -m gui      # sadece GUI widget testleri
 ```
 
 Test paketi şu katmanları kapsar: duration parser, path discovery, hardware detection, scheduler (3 codec, GPU/CPU karışımı), config (JSON profil roundtrip + resume state hash), extenders (ünite + entegrasyon), encoders (args yapısı + e2e HEVC/H.264), filters (filtergraph üretimi + e2e), presets, pipeline (resume, fail tolerance, paralel batch), GUI widget davranışları.

@@ -322,7 +322,3 @@ def detect() -> HardwareInfo:
         sorted(info.available_encoders),
     )
     return info
-
-
-def reset_cache() -> None:
-    detect.cache_clear()

@@ -43,13 +43,3 @@ def safe_output_path(out_dir: Path, source: Path, template: str, **kwargs: str) 
         i += 1
 
 
-def temp_dir_for(source: Path, root: Path | None = None) -> Path:
-    """Per-job temp directory."""
-    base = root or (source.parent / ".video_extender_tmp")
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-
-def state_file(folder: Path) -> Path:
-    """Resume state file location."""
-    return folder / ".video_extender_state.json"
