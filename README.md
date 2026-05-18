@@ -19,16 +19,12 @@ Scheduler her donanım encoder'ını başlamadan önce **functional probe** ediy
 
 ## Hızlı Başlangıç
 
-```bash
-# Linux / macOS:
-./run.sh
-
-# Windows (cmd / PowerShell):
-run.bat
-
-# Veya doğrudan Python ile (cross-platform):
-python run.py
-```
+| Platform | Çift-tıkla (GUI) | Terminal'den |
+|----------|-----------------|--------------|
+| **Linux** | — | `./run.sh` |
+| **macOS** | `run.command` (Finder'dan çift-tık) | `./run.sh` |
+| **Windows 11/10** | `run.bat` (Explorer'dan çift-tık) | `run.bat` veya `python run.py` |
+| Hepsi | — | `python run.py` |
 
 İlk çalıştırma `.venv/` oluşturur ve PySide6'yı yükler. Sonraki çalıştırmalarda hızlıca açılır. **ffmpeg + ffprobe** sistemde olmalı:
 
