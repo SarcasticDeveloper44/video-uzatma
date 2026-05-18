@@ -356,3 +356,78 @@ class TestRealWorldStress:
         logs = list(log_dir.glob("*.ffmpeg.log"))
         assert len(logs) == 1
         assert logs[0].stat().st_size > 0
+
+
+class TestFfmpegEncodeFailure:
+    """Probe succeeds but the ffmpeg encode itself fails. Verify the failure is
+    detected, surfaced as FAILED with an actionable error, and the per-job log
+    is written so the user can inspect it.
+    """
+
+    def _patch_ffmpeg_to_fail(self, monkeypatch, *,
+                              returncode: int = 1,
+                              stderr: str = ("Error: simulated encode failure\n"
+                                             "[h264_nvenc] cannot allocate session\n"),
+                              cancelled: bool = False) -> None:
+        from video_extender.core.ffmpeg import FFmpegResult
+
+        def _fake_run(self, args, on_progress=None, stderr_log_path=None):
+            if stderr_log_path is not None:
+                stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+                stderr_log_path.write_text(stderr, encoding="utf-8")
+            return FFmpegResult(
+                returncode=returncode, stderr_log=stderr,
+                cmd=list(args), cancelled=cancelled,
+            )
+
+        monkeypatch.setattr(
+            "video_extender.core.ffmpeg.FFmpegRunner.run", _fake_run,
+        )
+
+    def test_ffmpeg_nonzero_marks_job_failed(self, vertical_3s, tmp_path, monkeypatch) -> None:
+        self._patch_ffmpeg_to_fail(monkeypatch, returncode=1)
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        BatchRunner(jobs, spec, tmp_path, resume=False).run()
+        assert jobs[0].status.value == "failed"
+        assert jobs[0].error is not None
+        assert "exited 1" in jobs[0].error
+        assert ("simulated encode failure" in jobs[0].error
+                or "cannot allocate session" in jobs[0].error)
+
+    def test_stderr_log_written_on_failure(self, vertical_3s, tmp_path, monkeypatch) -> None:
+        self._patch_ffmpeg_to_fail(monkeypatch, returncode=137)  # SIGKILL-style
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        BatchRunner(jobs, spec, tmp_path, resume=False).run()
+        assert jobs[0].stderr_log is not None
+        assert jobs[0].stderr_log.exists()
+        content = jobs[0].stderr_log.read_text(encoding="utf-8")
+        assert "simulated encode failure" in content
+
+    def test_failed_job_not_recorded_in_state(self, vertical_3s, tmp_path, monkeypatch) -> None:
+        """Failed jobs must NOT enter resume state so a second attempt retries them."""
+        self._patch_ffmpeg_to_fail(monkeypatch, returncode=1)
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        BatchRunner(build_jobs(sources, spec), spec, tmp_path, resume=True).run()
+        jobs2 = build_jobs(sources, spec)
+        BatchRunner(jobs2, spec, tmp_path, resume=True).run()
+        assert jobs2[0].status.value == "failed"  # NOT "skipped"
+
+    def test_ffmpeg_cancelled_marks_job_cancelled(
+        self, vertical_3s, tmp_path, monkeypatch,
+    ) -> None:
+        self._patch_ffmpeg_to_fail(monkeypatch, returncode=-15, cancelled=True)
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        BatchRunner(jobs, spec, tmp_path, resume=False).run()
+        assert jobs[0].status.value == "cancelled"
+        assert "cancelled" in (jobs[0].error or "").lower()
