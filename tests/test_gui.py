@@ -142,6 +142,39 @@ class TestVideoList:
         bar = vl.cellWidget(0, 4)
         assert bar.value() == 42
 
+    def test_remove_row_reindexes(self, qapp, vertical_3s, tmp_path) -> None:
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+
+        vl = VideoListWidget()
+        media = probe_file(vertical_3s)
+        a = tmp_path / "a.mp4"; a.write_bytes(vertical_3s.read_bytes())
+        b = tmp_path / "b.mp4"; b.write_bytes(vertical_3s.read_bytes())
+        c = tmp_path / "c.mp4"; c.write_bytes(vertical_3s.read_bytes())
+        for p in (a, b, c):
+            vl.add_job(Job(source=p, media=media, status=JobStatus.PENDING))
+        assert vl.rowCount() == 3
+        # Remove middle row
+        assert vl.remove_row_for(b)
+        assert vl.rowCount() == 2
+        # c should now be at row 1 (was 2)
+        assert vl._row_for_source[c] == 1
+        assert vl._row_for_source[a] == 0
+
+    def test_remove_row_signal(self, qapp, vertical_3s) -> None:
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+
+        vl = VideoListWidget()
+        media = probe_file(vertical_3s)
+        job = Job(source=vertical_3s, media=media, status=JobStatus.PENDING)
+        vl.add_job(job)
+        received = []
+        vl.row_remove_requested.connect(lambda p: received.append(p))
+        # Emit directly (testing menu trigger end-to-end requires Qt event loop)
+        vl.row_remove_requested.emit(vertical_3s)
+        assert received == [vertical_3s]
+
 
 class TestHardwareInfoWidget:
     def test_renders(self, qapp) -> None:

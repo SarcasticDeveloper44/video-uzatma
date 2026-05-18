@@ -4,8 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QProgressBar, QTableWidget, QTableWidgetItem, QWidget,
+    QAbstractItemView, QHeaderView, QMenu, QProgressBar, QTableWidget,
+    QTableWidgetItem, QWidget,
 )
 
 from video_extender.core.job import Job, JobStatus
@@ -22,6 +24,18 @@ def _format_eta(seconds: float) -> str:
         return f"{m}m{s:02d}s"
     h, m = divmod(m, 60)
     return f"{h}h{m:02d}m"
+
+
+def _format_filesize(num_bytes: int) -> str:
+    if num_bytes <= 0:
+        return "—"
+    units = ["B", "KB", "MB", "GB"]
+    val = float(num_bytes)
+    for u in units:
+        if val < 1024 or u == "GB":
+            return f"{val:.1f} {u}" if u != "B" else f"{int(val)} {u}"
+        val /= 1024
+    return f"{val:.1f} GB"
 
 STATUS_TEXT = {
     JobStatus.PENDING:   "Bekliyor",
@@ -46,8 +60,9 @@ STATUS_COLOR = {
 class VideoListWidget(QTableWidget):
     """Table showing each Job's status and progress."""
     row_open_log = Signal(Path)
+    row_remove_requested = Signal(Path)  # emits source path of row to remove
 
-    COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Worker"]
+    COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Boyut", "Worker"]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(0, len(self.COLS), parent)
@@ -61,6 +76,47 @@ class VideoListWidget(QTableWidget):
         for i in range(1, len(self.COLS)):
             h.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         self._row_for_source: dict[Path, int] = {}
+        # Right-click context menu for removing pending rows.
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+
+    def _on_context_menu(self, pos) -> None:
+        idx = self.indexAt(pos)
+        if not idx.isValid():
+            return
+        row = idx.row()
+        source = next((s for s, r in self._row_for_source.items() if r == row), None)
+        if source is None:
+            return
+        # Only show "Remove" if this row is still pending (not running/completed).
+        status_item = self.item(row, 3)
+        is_terminal_or_running = (
+            status_item is not None and status_item.text() in {
+                STATUS_TEXT[JobStatus.RUNNING], STATUS_TEXT[JobStatus.COMPLETED],
+                STATUS_TEXT[JobStatus.FAILED], STATUS_TEXT[JobStatus.CANCELLED],
+                STATUS_TEXT[JobStatus.SKIPPED],
+            }
+        )
+        if is_terminal_or_running:
+            return
+        menu = QMenu(self)
+        action = QAction("Bu video'yu listeden çıkar", self)
+        action.triggered.connect(lambda: self.row_remove_requested.emit(source))
+        menu.addAction(action)
+        menu.exec(self.viewport().mapToGlobal(pos))
+
+    def remove_row_for(self, source: Path) -> bool:
+        """Remove the row matching `source`. Re-indexes the source→row map."""
+        if source not in self._row_for_source:
+            return False
+        row = self._row_for_source[source]
+        self.removeRow(row)
+        del self._row_for_source[source]
+        # Shift all entries below the removed row up by one.
+        for s, r in list(self._row_for_source.items()):
+            if r > row:
+                self._row_for_source[s] = r - 1
+        return True
 
     def clear_rows(self) -> None:
         self.setRowCount(0)
@@ -93,7 +149,8 @@ class VideoListWidget(QTableWidget):
         self.setCellWidget(row, 4, bar)
         self.setItem(row, 5, QTableWidgetItem("—"))   # Speed
         self.setItem(row, 6, QTableWidgetItem("—"))   # ETA
-        self.setItem(row, 7, QTableWidgetItem(""))    # Worker
+        self.setItem(row, 7, QTableWidgetItem("—"))   # Output size
+        self.setItem(row, 8, QTableWidgetItem(""))    # Worker
 
     def update_job(self, job: Job) -> None:
         row = self._row_for_source.get(job.source)
@@ -128,6 +185,15 @@ class VideoListWidget(QTableWidget):
                 eta_item.setText("—")
             elif job.status == JobStatus.SKIPPED:
                 eta_item.setText("atlandı")
-        worker_item = self.item(row, 7)
+        size_item = self.item(row, 7)
+        if size_item:
+            if job.status == JobStatus.COMPLETED and job.output and job.output.exists():
+                try:
+                    size_item.setText(_format_filesize(job.output.stat().st_size))
+                except OSError:
+                    size_item.setText("—")
+            elif job.status not in (JobStatus.PENDING, JobStatus.RUNNING):
+                size_item.setText("—")
+        worker_item = self.item(row, 8)
         if worker_item and job.worker_label:
             worker_item.setText(job.worker_label)

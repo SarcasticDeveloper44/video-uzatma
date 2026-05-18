@@ -97,6 +97,8 @@ class MainWindow(QMainWindow):
 
         # Wire row-click → show ffmpeg log for failed jobs
         self.video_list.cellDoubleClicked.connect(self._on_row_double_clicked)
+        # Right-click → remove pending video from queue
+        self.video_list.row_remove_requested.connect(self._on_remove_row)
 
         self._refresh_summary()
         self._run_initial_preflight()
@@ -363,6 +365,19 @@ class MainWindow(QMainWindow):
     # -----------------------------------------------------------------
     # Inline ffmpeg log viewer (for failed jobs)
     # -----------------------------------------------------------------
+    def _on_remove_row(self, source: Path) -> None:
+        # Only allow removal when no batch is running.
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            QMessageBox.information(
+                self, "İşlem devam ediyor",
+                "Batch çalışırken video kaldırılamaz. Önce işlemi iptal et.",
+            )
+            return
+        self._jobs = [j for j in self._jobs if j.source != source]
+        self.video_list.remove_row_for(source)
+        self.start_btn.setEnabled(bool(self._jobs))
+        self._refresh_summary()
+
     def _on_row_double_clicked(self, row: int, _col: int) -> None:
         if row < 0:
             return
