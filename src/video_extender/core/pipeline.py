@@ -98,6 +98,74 @@ class BuiltCommand:
     output: Path
 
 
+def _compose_filter_complex(
+    ext_plan: ExtenderPlan,
+    frags: list[FilterFragment],
+    gpu_upload_filter: str,
+) -> tuple[str, str, str]:
+    """Stitch the extender's filtergraph + filter chain segments + (optional)
+    GPU upload filter into a single -filter_complex string, tracking the
+    currently-valid video/audio stream labels through each transformation.
+
+    Returns (filter_complex_string, final_video_label, final_audio_label).
+    """
+    fc_parts: list[str] = []
+    if ext_plan.filtergraph:
+        fc_parts.append(ext_plan.filtergraph)
+
+    cur_v = ext_plan.video_label or "[0:v]"
+    cur_a = ext_plan.audio_label or "[0:a]"
+
+    for f in frags:
+        if f.filter_segment:
+            fc_parts.append(f.filter_segment)
+        if f.new_video_label:
+            cur_v = f.new_video_label
+        if f.new_audio_label:
+            cur_a = f.new_audio_label
+
+    # GPU encoders that need a hwframe input (VAAPI, QSV) terminate the chain
+    # with a format-conversion+upload filter.
+    if gpu_upload_filter:
+        hw_label = f"[hwout_{cur_v.strip('[]')}]"
+        fc_parts.append(f"{cur_v}{gpu_upload_filter}{hw_label}")
+        cur_v = hw_label
+
+    return ";".join(p for p in fc_parts if p), cur_v, cur_a
+
+
+def _compose_inputs(
+    source: Path,
+    ext_plan: ExtenderPlan,
+    frags: list[FilterFragment],
+) -> list[str]:
+    """Build the `-i ...` portion of the ffmpeg argv, including per-input
+    prefix flags like `-stream_loop -1` and `-loop 1` placed BEFORE the
+    input they apply to.
+    """
+    if ext_plan.extra_input_args and len(ext_plan.extra_input_args) != len(ext_plan.extra_inputs):
+        raise RuntimeError(
+            f"ExtenderPlan: extra_input_args ({len(ext_plan.extra_input_args)}) and "
+            f"extra_inputs ({len(ext_plan.extra_inputs)}) length mismatch"
+        )
+
+    inputs: list[str] = []
+    # Source first (with extender-supplied source flags like -stream_loop).
+    inputs += list(ext_plan.source_input_args)
+    inputs += ["-i", str(source)]
+    # Extender's extra inputs (intro/outro/image), with per-input prefix args.
+    for i, extra in enumerate(ext_plan.extra_inputs):
+        if ext_plan.extra_input_args:
+            inputs += list(ext_plan.extra_input_args[i])
+        inputs += ["-i", str(extra)]
+    # Filter extras (watermark image, subtitle file, etc.).
+    for f in frags:
+        for path in f.extra_inputs:
+            inputs += list(f.prefix_input_args)
+            inputs += ["-i", path]
+    return inputs
+
+
 def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltCommand:
     """Produce the full ffmpeg argv (without the ffmpeg binary itself)."""
     assert job.media is not None and job.spec is not None and job.output is not None
@@ -111,39 +179,22 @@ def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltComm
     main_w = job.media.video.width if job.media.video else 0
     chain = _resolve_filters(spec, target, main_w)
 
-    # 1) Build extender plan
     ext_plan: ExtenderPlan = extender.build_plan(
         job.source, job.media, target,
         audio_fade_out_seconds=spec.audio_fade_out_seconds,
         options=spec.extender_options or {},
     )
 
-    # 2) Build filter chain on top of extender's output labels
-    in_v = ext_plan.video_label or "[0:v]"
-    in_a = ext_plan.audio_label or "[0:a]"
     next_input = 1 + len(ext_plan.extra_inputs)
-    frags: list[FilterFragment] = chain.build(in_video=in_v, in_audio=in_a, next_input_index=next_input)
+    frags: list[FilterFragment] = chain.build(
+        in_video=ext_plan.video_label or "[0:v]",
+        in_audio=ext_plan.audio_label or "[0:a]",
+        next_input_index=next_input,
+    )
 
-    # 3) Compose the global filter_complex
-    fc_parts: list[str] = []
-    if ext_plan.filtergraph:
-        fc_parts.append(ext_plan.filtergraph)
-    cur_v, cur_a = in_v, in_a
-    if ext_plan.video_label:
-        cur_v = ext_plan.video_label
-    if ext_plan.audio_label:
-        cur_a = ext_plan.audio_label
-    for f in frags:
-        if f.filter_segment:
-            fc_parts.append(f.filter_segment)
-        if f.new_video_label:
-            cur_v = f.new_video_label
-        if f.new_audio_label:
-            cur_a = f.new_audio_label
-
-    # 4) Encoder args first — we need them BEFORE finalizing filter_complex
-    # because some encoders contribute a final filter (hwupload) and need
-    # hw_init_args prepended at the very top of the argv.
+    # Encoder args resolved early because GPU-class encoders contribute a
+    # terminal upload filter to the filter_complex and prepend hw_init_args
+    # ahead of every -i flag.
     enc_args: EncoderArgs = encoder.build_args(
         bitrate_kbps=params.bitrate_kbps,
         audio_bitrate_kbps=params.audio_bitrate_kbps,
@@ -152,63 +203,27 @@ def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltComm
         threads=slot.threads,
     )
 
-    # Append GPU-upload final filter if needed (e.g. VAAPI's format=nv12,hwupload)
-    if enc_args.gpu_upload_filter:
-        hw_label = f"[hwout_{cur_v.strip('[]')}]"
-        fc_parts.append(f"{cur_v}{enc_args.gpu_upload_filter}{hw_label}")
-        cur_v = hw_label
+    filter_complex, map_v, map_a = _compose_filter_complex(
+        ext_plan, frags, enc_args.gpu_upload_filter,
+    )
+    inputs = _compose_inputs(job.source, ext_plan, frags)
+    extra_output_args = [arg for f in frags for arg in f.output_metadata_args]
 
-    filter_complex = ";".join(p for p in fc_parts if p)
-
-    # 5) Inputs section: source + extender extras + filter extras
-    inputs: list[str] = []
-    # source_input_args (e.g. -stream_loop -1) precede the source input
-    inputs += list(ext_plan.source_input_args)
-    inputs += ["-i", str(job.source)]
-    # Per-extra-input prefixes; lengths must match.
-    if ext_plan.extra_input_args and len(ext_plan.extra_input_args) != len(ext_plan.extra_inputs):
-        raise RuntimeError(
-            f"ExtenderPlan: extra_input_args ({len(ext_plan.extra_input_args)}) and "
-            f"extra_inputs ({len(ext_plan.extra_inputs)}) length mismatch"
-        )
-    for i, extra in enumerate(ext_plan.extra_inputs):
-        if ext_plan.extra_input_args:
-            inputs += list(ext_plan.extra_input_args[i])
-        inputs += ["-i", str(extra)]
-    for f in frags:
-        for path in f.extra_inputs:
-            # prefix_input_args (e.g. -loop 1 for stills) precede THIS input.
-            inputs += list(f.prefix_input_args)
-            inputs += ["-i", path]
-
-    # 6) Per-filter output-level metadata args (e.g. metadata strip)
-    extra_output_args: list[str] = []
-    for f in frags:
-        extra_output_args += list(f.output_metadata_args)
-
-    # 7) Assemble final argv. hw_init_args (e.g. -vaapi_device) MUST come before
-    # any -i or -filter_complex; pipeline already prepends ffmpeg flags later.
+    # Final argv: hw_init_args > inputs > -filter_complex > -map > encoder > output.
     argv: list[str] = []
     argv += list(enc_args.hw_init_args)
     argv += inputs
     if filter_complex:
         argv += ["-filter_complex", filter_complex]
-    # Map outputs: prefer chain's final labels; fall back to indexed mapping.
-    argv += ["-map", cur_v]
-    argv += ["-map", cur_a]
+    argv += ["-map", map_v, "-map", map_a]
     argv += list(enc_args.video_args)
     argv += list(enc_args.audio_args)
     argv += list(enc_args.container_args)
     argv += extra_output_args
     argv += ["-t", f"{target:.3f}"]
+    argv += [str(job.output)]
 
-    # 8) Finalize output path with template
-    out_path = job.output
-    if out_path is None:
-        raise RuntimeError("job.output not set")
-    argv += [str(out_path)]
-
-    return BuiltCommand(args=argv, target_duration=target, encoder_label=encoder.label, output=out_path)
+    return BuiltCommand(args=argv, target_duration=target, encoder_label=encoder.label, output=job.output)
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +231,55 @@ def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltComm
 # ---------------------------------------------------------------------------
 
 ProgressFn = Callable[[Job], None]
+
+
+def _make_progress_callback(
+    job: Job,
+    target_duration: float,
+    on_progress: ProgressFn | None,
+) -> Callable[[ProgressEvent], None]:
+    """Build a per-job progress-event handler that keeps Job.progress
+    monotonic and recomputes speed + ETA from each ffmpeg event.
+    """
+    def _cb(ev: ProgressEvent) -> None:
+        if target_duration > 0:
+            new_progress = min(1.0, ev.out_time_s / target_duration)
+            # ffmpeg's terminal 'progress=end' event sometimes lacks a valid
+            # out_time_ms, which would rewind the GUI bar to 0%. Only advance.
+            if new_progress > job.progress:
+                job.progress = new_progress
+        if ev.speed > 0:
+            job.speed = ev.speed
+        if ev.speed > 0 and target_duration > 0:
+            remaining = max(0.0, target_duration - ev.out_time_s)
+            job.eta_seconds = remaining / ev.speed
+        else:
+            job.eta_seconds = 0.0
+        if on_progress:
+            on_progress(job)
+    return _cb
+
+
+def _apply_ffmpeg_result(
+    job: Job, result: FFmpegResult, state_file: Path | None,
+) -> None:
+    """Translate the ffmpeg subprocess outcome into the job's terminal status."""
+    if result.cancelled:
+        job.status = JobStatus.CANCELLED
+        job.error = "cancelled by user"
+        return
+    if result.success:
+        job.status = JobStatus.COMPLETED
+        job.progress = 1.0
+        if state_file is not None and job.output is not None:
+            _config.mark_completed(state_file, job.source, job.output, job.spec)
+        return
+    # Non-zero exit → FAILED with last 5 stderr lines for diagnosis.
+    job.status = JobStatus.FAILED
+    tail = result.stderr_log.splitlines()[-5:]
+    job.error = f"ffmpeg exited {result.returncode}: {' | '.join(tail)}"
+    if state_file is not None:
+        _config.mark_failed(state_file, job.source, job.error)
 
 
 def execute_job(
@@ -238,8 +302,8 @@ def execute_job(
         job.target_duration = built.target_duration
         log.info("→ %s [%s] target=%.1fs", job.source.name, slot.label, built.target_duration)
 
-        # Per-job stderr log path — name by OUTPUT stem so multiple runs of the
-        # same source with different filename templates don't overwrite each other.
+        # Per-job stderr log — keyed by output stem so re-runs with different
+        # filename templates don't overwrite each other's logs.
         stderr_log = None
         if log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -247,40 +311,9 @@ def execute_job(
             stderr_log = log_dir / f"{log_stem}.ffmpeg.log"
             job.stderr_log = stderr_log
 
-        def _cb(ev: ProgressEvent) -> None:
-            if built.target_duration > 0:
-                new_progress = min(1.0, ev.out_time_s / built.target_duration)
-                # Progress is monotonic — ffmpeg's terminal "progress=end"
-                # event sometimes lacks a valid out_time_ms, which would
-                # otherwise rewind the GUI bar to 0%.
-                if new_progress > job.progress:
-                    job.progress = new_progress
-            if ev.speed > 0:
-                job.speed = ev.speed
-            if ev.speed > 0 and built.target_duration > 0:
-                remaining_out_s = max(0.0, built.target_duration - ev.out_time_s)
-                job.eta_seconds = remaining_out_s / ev.speed
-            else:
-                job.eta_seconds = 0.0
-            if on_progress:
-                on_progress(job)
-
-        result: FFmpegResult = runner.run(built.args, on_progress=_cb, stderr_log_path=stderr_log)
-
-        if result.cancelled:
-            job.status = JobStatus.CANCELLED
-            job.error = "cancelled by user"
-        elif result.success:
-            job.status = JobStatus.COMPLETED
-            job.progress = 1.0
-            if state_file is not None and job.output is not None:
-                _config.mark_completed(state_file, job.source, job.output, job.spec)
-        else:
-            job.status = JobStatus.FAILED
-            tail = result.stderr_log.splitlines()[-5:]
-            job.error = f"ffmpeg exited {result.returncode}: {' | '.join(tail)}"
-            if state_file is not None:
-                _config.mark_failed(state_file, job.source, job.error)
+        cb = _make_progress_callback(job, built.target_duration, on_progress)
+        result: FFmpegResult = runner.run(built.args, on_progress=cb, stderr_log_path=stderr_log)
+        _apply_ffmpeg_result(job, result, state_file)
     except NotImplementedError as exc:
         job.status = JobStatus.FAILED
         job.error = f"scaffold not implemented: {exc}"
@@ -334,25 +367,9 @@ class BatchRunner:
         state_path = out_dir / ".video_extender_state.json"
         log_dir = out_dir / "logs"
 
-        # Plan output paths for each job
-        for job in self.jobs:
-            job.spec = self.spec
-            if job.output is None:
-                job.output = safe_output_path(
-                    out_dir, job.source, self.spec.filename_template,
-                    duration=self._duration_label(),
-                    preset=self.spec.preset_name,
-                )
-
-        # Resume: skip only when (source, spec_hash) was already completed
-        # AND the output file still exists. Settings/template changes => re-run.
+        self._plan_output_paths(out_dir)
         if self.resume:
-            for job in self.jobs:
-                if _config.is_completed(state_path, job.source, self.spec, job.output):
-                    job.status = JobStatus.SKIPPED
-                    job.progress = 1.0
-                    if self.on_progress:
-                        self.on_progress(job)
+            self._apply_resume_filter(state_path)
 
         pending = [j for j in self.jobs if j.status in (JobStatus.PENDING, JobStatus.QUEUED)]
         if not pending:
@@ -363,16 +380,48 @@ class BatchRunner:
             encoder_override=self.spec.encoder_override,
             max_parallel_override=self.spec.max_parallel,
         )
-        worker_count = sched.total_workers
+        self._dispatch_pool(pending, sched, state_path, log_dir)
+        self._final_sweep()
+        return self.jobs
 
+    # ---- run() phases ----
+    def _plan_output_paths(self, out_dir: Path) -> None:
+        """Assign each Job an output path via the user's filename_template."""
+        for job in self.jobs:
+            job.spec = self.spec
+            if job.output is None:
+                job.output = safe_output_path(
+                    out_dir, job.source, self.spec.filename_template,
+                    duration=self._duration_label(),
+                    preset=self.spec.preset_name,
+                )
+
+    def _apply_resume_filter(self, state_path: Path) -> None:
+        """Mark jobs SKIPPED when a prior completion matches (source, spec_hash)
+        AND the output file still exists on disk."""
+        for job in self.jobs:
+            if _config.is_completed(state_path, job.source, self.spec, job.output):
+                job.status = JobStatus.SKIPPED
+                job.progress = 1.0
+                if self.on_progress:
+                    self.on_progress(job)
+
+    def _dispatch_pool(
+        self,
+        pending: list[Job],
+        sched: SchedulePlan,
+        state_path: Path,
+        log_dir: Path,
+    ) -> None:
+        """Submit each pending job to a worker slot and collect results.
+        Unhandled worker exceptions are mapped back to the originating job."""
+        worker_count = sched.total_workers
         with self._lock:
             self._runners = [FFmpegRunner() for _ in range(worker_count)]
+        slots = list(sched.slots)
 
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vx") as pool:
-            # Pair futures with their jobs so an unhandled worker exception
-            # can still be recorded against the right job.
             future_to_job: dict[Future, Job] = {}
-            slots = list(sched.slots)
 
             for i, job in enumerate(pending):
                 slot = slots[i % len(slots)]
@@ -384,41 +433,40 @@ class BatchRunner:
                         return j
                     return execute_job(
                         j, s,
-                        hw=self.hw,
-                        runner=r,
+                        hw=self.hw, runner=r,
                         state_file=state_path,
                         on_progress=self.on_progress,
                         log_dir=log_dir,
                     )
-                fut = pool.submit(_task)
-                future_to_job[fut] = job
+
+                future_to_job[pool.submit(_task)] = job
 
             for fut, job in future_to_job.items():
                 try:
                     fut.result()
                 except Exception as exc:  # noqa: BLE001
                     log.exception("worker raised for %s", job.source)
-                    # execute_job catches its own exceptions, but defensively
-                    # mark anything still non-terminal here.
                     if job.status not in _TERMINAL_STATUSES:
                         job.status = JobStatus.FAILED
                         job.error = f"worker exception: {exc}"
                         if self.on_progress:
                             self.on_progress(job)
 
-        # Final sweep: catch any job that fell through to a non-terminal state.
-        # This is a defense-in-depth guarantee — the summary counts must always
-        # equal len(jobs).
+    def _final_sweep(self) -> None:
+        """Defense-in-depth: every job MUST end in a terminal state so that
+        summary counts always equal len(jobs). Anything still non-terminal at
+        this point gets forced to FAILED with an explanatory error.
+        """
         for job in self.jobs:
             if job.status not in _TERMINAL_STATUSES:
-                log.warning("job ended in non-terminal status %s; forcing FAILED: %s",
-                            job.status.value, job.source)
+                log.warning(
+                    "job ended in non-terminal status %s; forcing FAILED: %s",
+                    job.status.value, job.source,
+                )
                 job.status = JobStatus.FAILED
                 job.error = job.error or "ended in non-terminal state (no completion signal)"
                 if self.on_progress:
                     self.on_progress(job)
-
-        return self.jobs
 
     def _duration_label(self) -> str:
         secs = int(self.spec.extend_seconds)
