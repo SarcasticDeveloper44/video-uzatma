@@ -31,6 +31,12 @@ from video_extender.utils.paths import ensure_output_dir, safe_output_path
 
 log = _logging.get("pipeline")
 
+# Job statuses that represent a finished outcome — no further work expected.
+_TERMINAL_STATUSES = frozenset({
+    JobStatus.COMPLETED, JobStatus.FAILED,
+    JobStatus.CANCELLED, JobStatus.SKIPPED,
+})
+
 
 # ---------------------------------------------------------------------------
 # Command builder
@@ -358,10 +364,11 @@ class BatchRunner:
             self._runners = [FFmpegRunner() for _ in range(worker_count)]
 
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vx") as pool:
-            futures: list[Future] = []
+            # Pair futures with their jobs so an unhandled worker exception
+            # can still be recorded against the right job.
+            future_to_job: dict[Future, Job] = {}
             slots = list(sched.slots)
 
-            # Round-robin slot assignment so GPU slots get picked up first.
             for i, job in enumerate(pending):
                 slot = slots[i % len(slots)]
                 runner = self._runners[i % len(self._runners)]
@@ -378,13 +385,33 @@ class BatchRunner:
                         on_progress=self.on_progress,
                         log_dir=log_dir,
                     )
-                futures.append(pool.submit(_task))
+                fut = pool.submit(_task)
+                future_to_job[fut] = job
 
-            for fut in futures:
+            for fut, job in future_to_job.items():
                 try:
                     fut.result()
-                except Exception:  # noqa: BLE001
-                    log.exception("worker raised")
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("worker raised for %s", job.source)
+                    # execute_job catches its own exceptions, but defensively
+                    # mark anything still non-terminal here.
+                    if job.status not in _TERMINAL_STATUSES:
+                        job.status = JobStatus.FAILED
+                        job.error = f"worker exception: {exc}"
+                        if self.on_progress:
+                            self.on_progress(job)
+
+        # Final sweep: catch any job that fell through to a non-terminal state.
+        # This is a defense-in-depth guarantee — the summary counts must always
+        # equal len(jobs).
+        for job in self.jobs:
+            if job.status not in _TERMINAL_STATUSES:
+                log.warning("job ended in non-terminal status %s; forcing FAILED: %s",
+                            job.status.value, job.source)
+                job.status = JobStatus.FAILED
+                job.error = job.error or "ended in non-terminal state (no completion signal)"
+                if self.on_progress:
+                    self.on_progress(job)
 
         return self.jobs
 

@@ -233,6 +233,42 @@ class TestBatchRunner:
         BatchRunner(jobs2, spec_b, tmp_path, resume=True).run()
         assert all(j.status.value == "completed" for j in jobs2)
 
+    def test_worker_exception_marks_job_failed(self, vertical_3s, tmp_path, monkeypatch) -> None:
+        """If execute_job itself somehow raises (or leaves status non-terminal),
+        BatchRunner must still record the job as FAILED so summary counts add up.
+        """
+        (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
+        sources = [tmp_path / vertical_3s.name]
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+
+        # Force execute_job to raise an unhandled exception (e.g. bug in code).
+        def _explode(*args, **kwargs):
+            raise RuntimeError("simulated worker crash")
+        from video_extender.core import pipeline as _pl
+        monkeypatch.setattr(_pl, "execute_job", _explode)
+
+        runner = BatchRunner(jobs, spec, tmp_path, resume=False)
+        runner.run()
+        # Job must end in FAILED — never PENDING/RUNNING.
+        assert all(j.status.value == "failed" for j in jobs)
+        assert all("worker exception" in (j.error or "") for j in jobs)
+
+    def test_summary_counts_always_total_to_jobs(self, vertical_3s, tmp_path) -> None:
+        """Defense-in-depth: completed+failed+skipped+cancelled must equal len(jobs)."""
+        for name in ("a", "b", "c"):
+            (tmp_path / f"{name}.mp4").write_bytes(vertical_3s.read_bytes())
+        (tmp_path / "broken.mp4").write_bytes(b"garbage")
+        sources = sorted(tmp_path.glob("*.mp4"))
+        spec = _spec()
+        jobs = build_jobs(sources, spec)
+        runner = BatchRunner(jobs, spec, tmp_path, resume=False)
+        runner.run()
+        counts = {"completed": 0, "failed": 0, "skipped": 0, "cancelled": 0}
+        for j in jobs:
+            counts[j.status.value] = counts.get(j.status.value, 0) + 1
+        assert sum(counts.values()) == len(jobs)
+
     def test_failed_job_doesnt_kill_batch(self, vertical_3s, tmp_path) -> None:
         (tmp_path / vertical_3s.name).write_bytes(vertical_3s.read_bytes())
         (tmp_path / "broken.mp4").write_bytes(b"garbage")
