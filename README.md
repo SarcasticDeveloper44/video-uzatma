@@ -106,6 +106,10 @@ Bayraklar: `--add <süre>` veya `--target <süre>` (örn: `45s`, `30m`, `1h30m`)
 
 Test paketi şu katmanları kapsar: duration parser, path discovery, hardware detection, scheduler (3 codec, GPU/CPU karışımı), config (JSON profil roundtrip + resume state hash), extenders (ünite + entegrasyon), encoders (args yapısı + e2e HEVC/H.264), filters (filtergraph üretimi + e2e), presets, pipeline (resume, fail tolerance, paralel batch), GUI widget davranışları.
 
+### Geliştirici dokümantasyonu
+
+Codebase mimarisi, veri akışı, extension noktaları (yeni encoder/filter/preset nasıl eklenir), threading modeli, hata yolları → **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
 ### Production'da çalışan encoder'lar
 
 | Encoder | Codec | Donanım | Notlar |
