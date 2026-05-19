@@ -58,6 +58,10 @@ class JobSpec:
     filename_template: str = "{name}_extended.{ext}"
     audio_fade_out_seconds: float = 1.5
     output_subdir: str = "output"
+    # Absolute output directory override. When set, all batch outputs land
+    # here regardless of source location. Empty = traditional behaviour
+    # (<source_folder>/<output_subdir>/).
+    output_dir_override: str = ""
 
 
 @dataclass

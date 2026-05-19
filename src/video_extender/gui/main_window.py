@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent, QGuiApplication
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
     QStatusBar, QTabWidget, QVBoxLayout, QWidget,
@@ -54,6 +54,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar(self))
 
         self._wire_signals()
+        self._wire_shortcuts()
         self._refresh_summary()
         self._run_initial_preflight()
         # Restore last-used spec + window geometry AFTER preflight so any
@@ -132,6 +133,9 @@ class MainWindow(QMainWindow):
         self.video_list.row_retry_requested.connect(self._on_retry_row)
         self.video_list.row_reveal_requested.connect(self._on_reveal_row)
         self.video_list.row_show_log_requested.connect(self._on_show_log_row)
+        self.video_list.rows_remove_requested.connect(self._on_remove_rows)
+        self.video_list.rows_retry_requested.connect(self._on_retry_rows)
+        self.video_list.rows_reveal_requested.connect(self._on_reveal_rows)
 
     # -----------------------------------------------------------------
     # Spec gathering / applying
@@ -157,6 +161,7 @@ class MainWindow(QMainWindow):
             extender_options=self.settings_panel.extender_options(),
             filename_template=self.settings_panel.filename_template_text,
             audio_fade_out_seconds=self.settings_panel.audio_fade,
+            output_dir_override=self.settings_panel.output_dir_override,
         )
 
     def _apply_spec(self, spec: JobSpec) -> None:
@@ -423,12 +428,46 @@ class MainWindow(QMainWindow):
     def _refresh_summary(self) -> None:
         try:
             spec = self._gather_spec()
+            size_hint = self._estimate_total_output_size(spec)
+            size_str = f" · ~{size_hint}" if size_hint else ""
             self.summary_label.setText(
                 f"<b>{len(self._jobs)}</b> video · {self.settings_panel.summary()} · "
-                f"{spec.preset_name} · filtreler: {len(spec.filters)}"
+                f"{spec.preset_name} · filtreler: {len(spec.filters)}{size_str}"
             )
         except Exception:  # noqa: BLE001
             self.summary_label.setText("")
+
+    def _estimate_total_output_size(self, spec: JobSpec) -> str:
+        """Rough size estimate: bitrate × target_duration × n_jobs.
+        Returns a human-readable string or '' when we can't estimate."""
+        if not self._jobs:
+            return ""
+        try:
+            params = PRESET_REGISTRY[spec.preset_name].for_quality(spec.quality)
+        except KeyError:
+            return ""
+        # Video bitrate adjusted for codec (HEVC ~70% of H.264, AV1 ~55%).
+        codec_factor = {"h264": 1.0, "hevc": 0.7, "av1": 0.55, "vp9": 0.6}.get(
+            spec.video_codec, 1.0,
+        )
+        v_bps = params.bitrate_kbps * 1000 * codec_factor
+        a_bps = params.audio_bitrate_kbps * 1000
+        total_bytes = 0.0
+        for j in self._jobs:
+            if j.media is None:
+                continue
+            # Per-job target duration: ADD adds extend_seconds; FILL caps.
+            if spec.extend_mode == ExtendMode.ADD:
+                dur = j.media.duration + spec.extend_seconds
+            else:
+                dur = max(j.media.duration, spec.extend_seconds)
+            total_bytes += dur * (v_bps + a_bps) / 8
+        if total_bytes <= 0:
+            return ""
+        mb = total_bytes / (1024 * 1024)
+        if mb < 1024:
+            return f"{mb:.0f} MB tahmini çıktı"
+        return f"{mb / 1024:.1f} GB tahmini çıktı"
 
     # -----------------------------------------------------------------
     # Settings persistence (QSettings + last-used JobSpec)
@@ -565,6 +604,66 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(bool(self._jobs))
         self._refresh_summary()
 
+    def _on_remove_rows(self, sources: list[Path]) -> None:
+        """Bulk: remove every pending/queued row in the selection."""
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            QMessageBox.information(
+                self, "İşlem devam ediyor",
+                "Batch çalışırken video kaldırılamaz. Önce işlemi iptal et.",
+            )
+            return
+        target_sources = {
+            j.source for j in self._jobs
+            if j.source in sources and j.status in (JobStatus.PENDING, JobStatus.QUEUED)
+        }
+        if not target_sources:
+            return
+        self._jobs = [j for j in self._jobs if j.source not in target_sources]
+        for s in target_sources:
+            self.video_list.remove_row_for(s)
+        self.start_btn.setEnabled(bool(self._jobs))
+        self._refresh_summary()
+
+    def _on_retry_rows(self, sources: list[Path]) -> None:
+        """Bulk: reset every FAILED row in the selection and re-run the batch."""
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            QMessageBox.information(
+                self, "İşlem devam ediyor",
+                "Batch çalışırken yeniden deneme başlatılamaz. Önce bitmesini bekle.",
+            )
+            return
+        targets = [
+            j for j in self._jobs
+            if j.source in sources and j.status == JobStatus.FAILED
+        ]
+        if not targets:
+            return
+        for j in targets:
+            self._reset_job_for_retry(j)
+        self._start_batch()
+
+    def _on_reveal_rows(self, sources: list[Path]) -> None:
+        """Bulk: reveal the output of every completed row in the selection.
+        We only launch the file manager ONCE (per common parent dir) to
+        avoid spamming."""
+        from video_extender.utils.paths import reveal_in_file_manager
+        completed = [
+            j for j in self._jobs
+            if j.source in sources and j.status == JobStatus.COMPLETED
+            and j.output is not None and j.output.exists()
+        ]
+        if not completed:
+            return
+        # Group by output parent dir; reveal one representative per dir.
+        seen: set[Path] = set()
+        for j in completed:
+            assert j.output is not None
+            parent = j.output.parent
+            if parent in seen:
+                continue
+            seen.add(parent)
+            reveal_in_file_manager(j.output)
+
     def _on_reveal_row(self, source: Path) -> None:
         """Right-click → 'Çıktıyı klasörde göster' on a completed/skipped row."""
         job = next((j for j in self._jobs if j.source == source), None)
@@ -638,6 +737,41 @@ class MainWindow(QMainWindow):
         dlg.setStyleSheet("QTextEdit { min-width: 900px; min-height: 480px; }")
         dlg.exec()
 
+    def _wire_shortcuts(self) -> None:
+        """Power-user keyboard bindings.
+          Ctrl+O — open folder/file picker
+          F5     — re-probe current folder (refresh)
+          Esc    — cancel running batch
+          Ctrl+R — retry all failed
+          Delete — remove selected pending rows
+          Ctrl+S — save profile, Ctrl+L — load profile
+        """
+        shortcuts: list[tuple[str, object]] = [
+            ("Ctrl+O", self.folder_picker._pick),
+            ("F5", self._refresh_folder),
+            ("Esc", self._cancel_batch),
+            ("Ctrl+R", self._retry_failed),
+            ("Delete", self._delete_selected_rows),
+            ("Ctrl+S", self.profiles_panel._save),
+            ("Ctrl+L", self.profiles_panel._load),
+        ]
+        for key, slot in shortcuts:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(slot)
+
+    def _refresh_folder(self) -> None:
+        """F5 shortcut: re-probe the current source. Pulls jobs back from disk."""
+        if self.folder_picker.folder is not None and not (
+            self._batch_thread is not None and self._batch_thread.isRunning()
+        ):
+            self._on_folder_chosen(self.folder_picker.folder)
+
+    def _delete_selected_rows(self) -> None:
+        """Delete shortcut: remove every pending/queued selected row."""
+        selected = self.video_list._selected_sources()
+        if selected:
+            self._on_remove_rows(selected)
+
     def _reset_to_defaults(self) -> None:
         """Wipe QSettings + restore every panel to factory defaults.
 
@@ -682,6 +816,7 @@ class MainWindow(QMainWindow):
         sp.parallel_slider.setValue(0)  # auto
         sp.fade_spin.setValue(1.5)
         sp.filename_template.setText("{name}_extended.{ext}")
+        sp.output_dir_input.setText("")
         sp.intro_path.setText("")
         sp.outro_path.setText("")
         sp.endcard_path.setText("")

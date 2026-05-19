@@ -568,7 +568,12 @@ class BatchRunner:
         # is picked.
         self.spec = _enforce_meta_mode_codec(self.spec)
 
-        out_dir = ensure_output_dir(self.source_folder, self.spec.output_subdir)
+        # Output dir: absolute override wins; otherwise source-relative subdir.
+        if self.spec.output_dir_override:
+            out_dir = Path(self.spec.output_dir_override)
+            out_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            out_dir = ensure_output_dir(self.source_folder, self.spec.output_subdir)
         state_path = out_dir / ".video_extender_state.json"
         log_dir = out_dir / "logs"
 

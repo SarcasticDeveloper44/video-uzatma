@@ -64,6 +64,10 @@ class VideoListWidget(QTableWidget):
     row_retry_requested = Signal(Path)   # emits source path of failed row to retry
     row_reveal_requested = Signal(Path)  # emits source path; show output in file mgr
     row_show_log_requested = Signal(Path)  # explicit "show ffmpeg log" action
+    # Bulk operations (multi-select + right-click)
+    rows_remove_requested = Signal(list)
+    rows_retry_requested = Signal(list)
+    rows_reveal_requested = Signal(list)
 
     COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Boyut", "Worker"]
 
@@ -72,16 +76,48 @@ class VideoListWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLS)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # Multi-select via Ctrl-click / Shift-click for bulk operations.
+        self.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection,
+        )
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         h = self.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, len(self.COLS)):
             h.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        # Click column header to sort. The source→row map is rebuilt after
+        # each sort because rows physically swap (we don't use a proxy model).
+        self.setSortingEnabled(True)
+        h.sortIndicatorChanged.connect(self._on_sort_changed)
         self._row_for_source: dict[Path, int] = {}
         # Right-click context menu for removing pending rows.
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
+
+    def _on_sort_changed(self, _section: int, _order: int) -> None:
+        """After a sort, rebuild the source→row map from the row tooltips
+        (which carry the source path)."""
+        new_map: dict[Path, int] = {}
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            tooltip = item.toolTip()
+            if tooltip:
+                new_map[Path(tooltip)] = row
+        self._row_for_source = new_map
+
+    def _selected_sources(self) -> list[Path]:
+        """Return the source paths of every currently selected row."""
+        rows = sorted({idx.row() for idx in self.selectedIndexes()})
+        sources: list[Path] = []
+        for row in rows:
+            for src, r in self._row_for_source.items():
+                if r == row:
+                    sources.append(src)
+                    break
+        return sources
 
     def _on_context_menu(self, pos: QPoint) -> None:
         idx = self.indexAt(pos)
@@ -93,9 +129,23 @@ class VideoListWidget(QTableWidget):
             return
         status_item = self.item(row, 3)
         status_text = status_item.text() if status_item else ""
-        menu = QMenu(self)
 
-        # State-specific primary action
+        # Detect multi-select context. If >1 row is selected, show bulk
+        # operations instead of single-row ones — the user clearly wants
+        # to operate on the whole selection.
+        selected = self._selected_sources()
+        is_bulk = len(selected) > 1 and source in selected
+
+        menu = QMenu(self)
+        if is_bulk:
+            self._build_bulk_menu(menu, selected)
+        else:
+            self._build_single_row_menu(menu, source, status_text)
+
+        if menu.actions():
+            menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _build_single_row_menu(self, menu: QMenu, source: Path, status_text: str) -> None:
         if status_text == STATUS_TEXT[JobStatus.FAILED]:
             retry = QAction("Bu video'yu yeniden dene", self)
             retry.triggered.connect(lambda: self.row_retry_requested.emit(source))
@@ -108,17 +158,26 @@ class VideoListWidget(QTableWidget):
             reveal = QAction("Çıktıyı klasörde göster", self)
             reveal.triggered.connect(lambda: self.row_reveal_requested.emit(source))
             menu.addAction(reveal)
-
-        # Always-available secondary: show ffmpeg log (useful in every state
-        # except "never ran" — for which the log won't exist anyway).
         if status_text != STATUS_TEXT[JobStatus.PENDING]:
             menu.addSeparator()
             show_log = QAction("ffmpeg log'unu göster", self)
             show_log.triggered.connect(lambda: self.row_show_log_requested.emit(source))
             menu.addAction(show_log)
 
-        if menu.actions():
-            menu.exec(self.viewport().mapToGlobal(pos))
+    def _build_bulk_menu(self, menu: QMenu, sources: list[Path]) -> None:
+        """Bulk actions applied to every selected row."""
+        n = len(sources)
+        retry_all = QAction(f"Hatalı olanları yeniden dene ({n} seçili)", self)
+        retry_all.triggered.connect(lambda: self.rows_retry_requested.emit(sources))
+        menu.addAction(retry_all)
+
+        remove_all = QAction(f"Bekleyenleri listeden çıkar ({n} seçili)", self)
+        remove_all.triggered.connect(lambda: self.rows_remove_requested.emit(sources))
+        menu.addAction(remove_all)
+
+        reveal_all = QAction(f"Tamamlanan çıktıları aç ({n} seçili)", self)
+        reveal_all.triggered.connect(lambda: self.rows_reveal_requested.emit(sources))
+        menu.addAction(reveal_all)
 
     def remove_row_for(self, source: Path) -> bool:
         """Remove the row matching `source`. Re-indexes the source→row map."""
@@ -138,6 +197,10 @@ class VideoListWidget(QTableWidget):
         self._row_for_source.clear()
 
     def add_job(self, job: Job) -> None:
+        # Temporarily disable sort while we add the row — otherwise Qt would
+        # reposition the new row mid-insert and the source→row map breaks.
+        was_sorting = self.isSortingEnabled()
+        self.setSortingEnabled(False)
         row = self.rowCount()
         self.insertRow(row)
         self._row_for_source[job.source] = row
@@ -166,6 +229,9 @@ class VideoListWidget(QTableWidget):
         self.setItem(row, 6, QTableWidgetItem("—"))   # ETA
         self.setItem(row, 7, QTableWidgetItem("—"))   # Output size
         self.setItem(row, 8, QTableWidgetItem(""))    # Worker
+        # Re-enable sorting once the row is fully populated.
+        if was_sorting:
+            self.setSortingEnabled(True)
 
     def update_job(self, job: Job) -> None:
         row = self._row_for_source.get(job.source)

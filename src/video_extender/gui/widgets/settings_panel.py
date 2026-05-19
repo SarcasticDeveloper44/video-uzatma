@@ -173,12 +173,26 @@ class SettingsPanel(QFrame):
         self.filename_template.setToolTip("Token'lar: {name}, {ext}, {duration}, {preset}")
         form.addRow("Çıktı isim şablonu:", self.filename_template)
 
+        # Custom output folder (absolute path) — empty means <source>/output/
+        out_dir_row = QHBoxLayout()
+        self.output_dir_input = QLineEdit()
+        self.output_dir_input.setPlaceholderText(
+            "Boş → kaynak klasörünün altında /output/ (varsayılan)"
+        )
+        out_dir_btn = QPushButton("…")
+        out_dir_btn.setFixedWidth(32)
+        out_dir_btn.clicked.connect(self._pick_output_dir)
+        out_dir_row.addWidget(self.output_dir_input, 1)
+        out_dir_row.addWidget(out_dir_btn)
+        form.addRow("Çıktı klasörü:", out_dir_row)
+
         layout.addLayout(form)
         layout.addStretch(1)
 
         for w in (self.duration_input, self.unit_combo, self.method_combo,
                   self.quality_combo, self.codec_combo, self.encoder_combo,
                   self.fade_spin, self.filename_template,
+                  self.output_dir_input,
                   self.add_radio, self.fill_radio, self.compress_cb,
                   self.meta_mode_cb):
             # Heterogeneous widgets — each exposes only a subset of these signals.
@@ -258,6 +272,14 @@ class SettingsPanel(QFrame):
         if f:
             self.endcard_path.setText(f)
 
+    def _pick_output_dir(self) -> None:
+        d = QFileDialog.getExistingDirectory(
+            self, "Çıktı klasörü seç",
+            self.output_dir_input.text() or str(Path.home()),
+        )
+        if d:
+            self.output_dir_input.setText(d)
+
     def extender_options(self) -> dict[str, Any]:
         opts: dict[str, Any] = {}
         if self.intro_path.text().strip():
@@ -327,6 +349,10 @@ class SettingsPanel(QFrame):
     @property
     def filename_template_text(self) -> str:
         return self.filename_template.text() or "{name}_extended.{ext}"
+
+    @property
+    def output_dir_override(self) -> str:
+        return self.output_dir_input.text().strip()
 
     def summary(self) -> str:
         return f"{self.extend_mode.value} {format_duration(self.extend_seconds)} ({self.method}, {self.quality})"
