@@ -1,5 +1,6 @@
 """NVIDIA NVENC encoders (h264, hevc, av1)."""
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -18,7 +19,7 @@ class NvencH264(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # NVENC: use VBR with target bitrate; CQ when crf provided.
         v: list[str] = ["-c:v", self.ffmpeg_encoder, "-preset", "p5", "-tune", "hq"]
@@ -61,7 +62,7 @@ class NvencHevc(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # HEVC compresses ~30% better than H.264, so we drop the target bitrate
         # accordingly for similar perceived quality. tag:v hvc1 ensures iOS/Safari playback.

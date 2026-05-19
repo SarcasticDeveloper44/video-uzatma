@@ -11,6 +11,7 @@ Behavior:
 - Missing audio in any clip is replaced with silence so concat=v=1:a=1 succeeds.
 """
 from __future__ import annotations
+from typing import Any
 
 import json
 import subprocess
@@ -44,7 +45,7 @@ class IntroOutroExtender(ExtenderStrategy):
         target_duration: float,
         *,
         audio_fade_out_seconds: float = 1.5,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ExtenderPlan:
         opts = options or {}
         outro_path = opts.get("outro")

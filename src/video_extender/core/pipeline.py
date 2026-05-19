@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from video_extender.core import config as _config
 from video_extender.core import probe as _probe
@@ -421,7 +421,7 @@ class BatchRunner:
         slots = list(sched.slots)
 
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vx") as pool:
-            future_to_job: dict[Future, Job] = {}
+            future_to_job: dict[Future[Job], Job] = {}
 
             for i, job in enumerate(pending):
                 slot = slots[i % len(slots)]

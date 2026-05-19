@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".flv",

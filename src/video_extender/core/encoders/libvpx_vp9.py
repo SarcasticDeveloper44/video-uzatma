@@ -1,5 +1,6 @@
 """libvpx-vp9 (CPU VP9) — YouTube/Google's preferred codec for VOD."""
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -19,7 +20,7 @@ class LibvpxVp9(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # VP9 ~40% better than H.264 at same visual quality.
         vp9_bitrate = int(bitrate_kbps * 0.6)

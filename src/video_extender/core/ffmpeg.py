@@ -5,14 +5,16 @@ on stdout, keeping stderr for human/debug logs.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shlex
 import subprocess
 import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any
 
 from video_extender.core.hardware import detect
 from video_extender.utils import logging as _logging
@@ -101,7 +103,7 @@ class FFmpegRunner:
         self._lock = threading.Lock()
 
     # ---- ffprobe ----
-    def probe(self, path: Path) -> dict:
+    def probe(self, path: Path) -> dict[str, Any]:
         cmd = [
             self.ffprobe, "-v", "error",
             "-print_format", "json",
@@ -109,10 +111,11 @@ class FFmpegRunner:
             str(path),
         ]
         log.debug("ffprobe: %s", shlex.join(cmd))
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
         if out.returncode != 0:
             raise RuntimeError(f"ffprobe failed: {out.stderr.strip()}")
-        return json.loads(out.stdout)
+        result: dict[str, Any] = json.loads(out.stdout)
+        return result
 
     # ---- ffmpeg ----
     def run(
@@ -188,10 +191,8 @@ class FFmpegRunner:
             # during the batch (one leak per encode × 50 videos = exhaustion).
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         stream.close()
-                    except OSError:
-                        pass
 
         stderr_log = "\n".join(stderr_lines)
         if stderr_log_path is not None:
@@ -216,7 +217,5 @@ class FFmpegRunner:
         with self._lock:
             self._cancelled = True
             if self._proc is not None and self._proc.poll() is None:
-                try:
+                with contextlib.suppress(OSError):
                     self._proc.terminate()
-                except OSError:
-                    pass

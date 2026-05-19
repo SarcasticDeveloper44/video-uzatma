@@ -1,5 +1,6 @@
 """libx264 (CPU H.264) — universal fallback and high-quality reference."""
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -18,7 +19,7 @@ class Libx264(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         v: list[str] = [
             "-c:v", self.ffmpeg_encoder,

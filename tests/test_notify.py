@@ -60,7 +60,6 @@ class TestNotify:
 
         def _capture(args, **kwargs):
             calls.append(list(args))
-            return None
 
         with patch("video_extender.utils.notify.shutil.which",
                    return_value="/usr/bin/notify-send"), \

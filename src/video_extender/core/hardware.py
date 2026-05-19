@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 
 from video_extender.utils import logging as _logging
 
@@ -110,7 +111,7 @@ def _first_render_node() -> str | None:
     if platform.system() != "Linux":
         return None
     try:
-        nodes = sorted(os.listdir("/dev/dri"))
+        nodes = sorted(p.name for p in Path("/dev/dri").iterdir())
     except OSError:
         return None
     for n in nodes:
@@ -233,11 +234,8 @@ def _detect_apple_gpu() -> list[GpuInfo]:
     if platform.system() != "Darwin":
         return []
     machine = platform.machine()  # "arm64" or "x86_64"
-    if machine == "arm64":
-        name = "Apple Silicon"
-    else:
-        # Best-effort; system_profiler is slow, skip detail.
-        name = "Apple Mac GPU"
+    # system_profiler is slow for Intel Macs, skip detail there.
+    name = "Apple Silicon" if machine == "arm64" else "Apple Mac GPU"
     return [GpuInfo(vendor="apple", name=name, encoders=())]
 
 
@@ -270,7 +268,7 @@ def _ram_mb() -> int:
     sys = platform.system()
     if sys == "Linux":
         try:
-            with open("/proc/meminfo", encoding="ascii") as f:
+            with Path("/proc/meminfo").open(encoding="ascii") as f:
                 for line in f:
                     if line.startswith("MemTotal:"):
                         kb = int(line.split()[1])
@@ -305,9 +303,9 @@ def _assign_encoders_to_gpus(gpus: list[GpuInfo], encoders: frozenset[str]) -> l
         if g.vendor == "nvidia":
             enc = tuple(e for e in encoders if e.endswith("_nvenc"))
         elif g.vendor == "intel":
-            enc = tuple(e for e in encoders if e.endswith("_qsv") or e.endswith("_vaapi"))
+            enc = tuple(e for e in encoders if e.endswith(("_qsv", "_vaapi")))
         elif g.vendor == "amd":
-            enc = tuple(e for e in encoders if e.endswith("_amf") or e.endswith("_vaapi"))
+            enc = tuple(e for e in encoders if e.endswith(("_amf", "_vaapi")))
         elif g.vendor == "apple":
             enc = tuple(e for e in encoders if "videotoolbox" in e)
         else:

@@ -2,7 +2,9 @@
 aspect convert, subtitle burn, color grade."""
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -119,22 +121,16 @@ class FiltersPanel(QFrame):
                   self.aspect_cb, self.aspect_target, self.aspect_mode,
                   self.cg_cb, self.cg_brightness, self.cg_contrast,
                   self.cg_saturation, self.cg_gamma):
-            try:
-                w.toggled.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.textChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.currentIndexChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.valueChanged.connect(lambda *_: self.changed.emit())  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
+            # Each widget exposes a subset of these signals; suppress
+            # AttributeError so we don't have to branch per widget type.
+            with suppress(AttributeError):
+                w.toggled.connect(lambda *_: self.changed.emit())  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.textChanged.connect(lambda *_: self.changed.emit())  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.currentIndexChanged.connect(lambda *_: self.changed.emit())  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.valueChanged.connect(lambda *_: self.changed.emit())  # type: ignore[union-attr]
 
     def _pick_wm(self) -> None:
         f, _ = QFileDialog.getOpenFileName(
@@ -155,9 +151,9 @@ class FiltersPanel(QFrame):
             self.subs_cb.setChecked(True)
 
     # ---- API ----
-    def build_filter_chain(self) -> tuple[list[str], dict]:
+    def build_filter_chain(self) -> tuple[list[str], dict[str, Any]]:
         names: list[str] = []
-        opts: dict = {}
+        opts: dict[str, Any] = {}
         # Aspect convert must run FIRST so other filters see the converted resolution.
         if self.aspect_cb.isChecked():
             names.append("aspect_convert")

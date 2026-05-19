@@ -5,6 +5,7 @@ pixel formats directly. ProRes / HEVC HDR support also available but
 we focus on H.264/HEVC for ad delivery.
 """
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -42,7 +43,7 @@ class VideoToolboxH264(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         v = _vt_common_args(self.ffmpeg_encoder, bitrate_kbps, crf)
         v += ["-pix_fmt", "yuv420p", "-profile:v", "high"]
@@ -69,7 +70,7 @@ class VideoToolboxHevc(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         hevc_bitrate = int(bitrate_kbps * 0.7)
         v = _vt_common_args(self.ffmpeg_encoder, hevc_bitrate, crf)

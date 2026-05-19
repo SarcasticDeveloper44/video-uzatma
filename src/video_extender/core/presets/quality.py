@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Quality(str, Enum):
+class Quality(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"

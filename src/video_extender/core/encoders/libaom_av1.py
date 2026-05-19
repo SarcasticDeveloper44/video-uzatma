@@ -1,5 +1,6 @@
 """libaom-av1 (CPU AV1) — high quality, slow."""
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -19,7 +20,7 @@ class LibaomAv1(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # AV1 compresses ~50% better than H.264. Bitrate dropped further.
         av1_bitrate = int(bitrate_kbps * 0.55)
@@ -62,7 +63,7 @@ class LibSvtAv1(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         av1_bitrate = int(bitrate_kbps * 0.55)
         v: list[str] = [

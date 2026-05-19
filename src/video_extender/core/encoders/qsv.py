@@ -9,6 +9,7 @@ On Linux, QSV often shares the VA-API driver, so ensure libva-intel-driver
 or intel-media-driver is installed.
 """
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -46,7 +47,7 @@ class QsvH264(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         v = _qsv_common_args(self.ffmpeg_encoder, bitrate_kbps, crf)
         v += ["-profile:v", "high"]
@@ -75,7 +76,7 @@ class QsvHevc(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         hevc_bitrate = int(bitrate_kbps * 0.7)
         v = _qsv_common_args(self.ffmpeg_encoder, hevc_bitrate, crf)

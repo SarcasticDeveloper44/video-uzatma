@@ -1,5 +1,6 @@
 """Loop the source video to reach target duration."""
 from __future__ import annotations
+from typing import Any
 
 from pathlib import Path
 
@@ -19,7 +20,7 @@ class LoopExtender(ExtenderStrategy):
         target_duration: float,
         *,
         audio_fade_out_seconds: float = 1.5,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ExtenderPlan:
         # `-stream_loop -1` repeats the input infinitely; final duration capped by `-t`
         # applied at output. We also explicitly trim via filter to be deterministic.

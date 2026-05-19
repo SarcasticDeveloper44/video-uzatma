@@ -9,6 +9,7 @@ Common render nodes:
     /dev/dri/renderD129 (second GPU, e.g. discrete + iGPU)
 """
 from __future__ import annotations
+from typing import Any
 
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
 def _detect_render_node() -> str:
     """Find the first available DRM render node on Linux."""
-    if not os.name == "posix":
+    if os.name != "posix":
         return "/dev/dri/renderD128"
     drm_dir = Path("/dev/dri")
     if not drm_dir.exists():
@@ -57,7 +58,7 @@ class VaapiH264(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         render_node = (extra or {}).get("render_node") or _detect_render_node()
         v = _vaapi_common_args(self.ffmpeg_encoder, bitrate_kbps, crf)
@@ -87,7 +88,7 @@ class VaapiHevc(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         render_node = (extra or {}).get("render_node") or _detect_render_node()
         hevc_bitrate = int(bitrate_kbps * 0.7)

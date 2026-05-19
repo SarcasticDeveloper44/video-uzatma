@@ -1,5 +1,6 @@
 """ExtenderStrategy ABC + auto-registry."""
 from __future__ import annotations
+from typing import Any
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ class ExtenderPlan:
     audio_label: str | None = None
 
 
-EXTENDER_REGISTRY: dict[str, type["ExtenderStrategy"]] = {}
+EXTENDER_REGISTRY: dict[str, type[ExtenderStrategy]] = {}
 
 
 class ExtenderStrategy(ABC):
@@ -58,7 +59,7 @@ class ExtenderStrategy(ABC):
         target_duration: float,
         *,
         audio_fade_out_seconds: float = 1.5,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ExtenderPlan:
         """Build the ffmpeg fragment that produces a `target_duration`-long output.
 

@@ -1,6 +1,7 @@
 """JSON profile save/load + resume state file."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from dataclasses import asdict, fields
@@ -22,8 +23,9 @@ def _enum_to_value(obj: Any) -> Any:
 
 
 def jobspec_to_dict(spec: JobSpec) -> dict[str, Any]:
-    d = asdict(spec)
-    return _enum_to_value(d)
+    d: dict[str, Any] = asdict(spec)
+    result: dict[str, Any] = _enum_to_value(d)
+    return result
 
 
 def jobspec_from_dict(data: dict[str, Any]) -> JobSpec:
@@ -61,16 +63,15 @@ def load_state(state_path: Path) -> dict[str, Any]:
     if not state_path.exists():
         return {"completed": [], "failed": {}}
     try:
-        return json.loads(state_path.read_text(encoding="utf-8"))
+        state: dict[str, Any] = json.loads(state_path.read_text(encoding="utf-8"))
+        return state
     except (OSError, json.JSONDecodeError):
         return {"completed": [], "failed": {}}
 
 
 def save_state(state_path: Path, state: dict[str, Any]) -> None:
-    try:
+    with contextlib.suppress(OSError):
         state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
 
 
 def mark_completed(
@@ -143,9 +144,8 @@ def is_completed(
         # Prefer hash-based match (new state format)
         if cur_hash is not None and e.get("spec_hash") == cur_hash:
             stored_out = e.get("output")
-            if stored_out and not Path(stored_out).exists():
-                return False  # file was deleted — re-run
-            return True
+            # If we recorded an output path but it no longer exists, re-run.
+            return not (stored_out and not Path(stored_out).exists())
         # Legacy fallback: state predates spec_hash
         if cur_hash is None and out_str is not None and e.get("output") == out_str:
             return True

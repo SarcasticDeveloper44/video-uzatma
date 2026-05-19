@@ -27,7 +27,7 @@ class FilterFragment:
     output_metadata_args: tuple[str, ...] = ()
 
 
-FILTER_REGISTRY: dict[str, type["Filter"]] = {}
+FILTER_REGISTRY: dict[str, type[Filter]] = {}
 
 
 class Filter(ABC):

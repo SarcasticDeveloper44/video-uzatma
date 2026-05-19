@@ -9,7 +9,7 @@ Strategy:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from video_extender.core.hardware import HardwareInfo, detect, probe_encoder
 from video_extender.utils import logging as _logging
@@ -17,7 +17,7 @@ from video_extender.utils import logging as _logging
 log = _logging.get("scheduler")
 
 
-class WorkerKind(str, Enum):
+class WorkerKind(StrEnum):
     GPU = "gpu"
     CPU = "cpu"
 
@@ -82,10 +82,9 @@ def _plan_with_override(
     if override not in hw.available_encoders:
         log.warning("encoder override '%s' not available; falling back to CPU libx264", override)
         override = "libx264"
-    if _is_gpu_encoder(override):
-        if probe_gpu and not probe_encoder(override):
-            log.warning("encoder override '%s' probe failed; falling back to CPU libx264", override)
-            override = "libx264"
+    if _is_gpu_encoder(override) and probe_gpu and not probe_encoder(override):
+        log.warning("encoder override '%s' probe failed; falling back to CPU libx264", override)
+        override = "libx264"
 
     slots: list[WorkerSlot] = []
     if _is_gpu_encoder(override):

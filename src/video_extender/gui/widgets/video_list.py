@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QMenu, QProgressBar, QTableWidget,
@@ -81,7 +81,7 @@ class VideoListWidget(QTableWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
 
-    def _on_context_menu(self, pos) -> None:
+    def _on_context_menu(self, pos: QPoint) -> None:
         idx = self.indexAt(pos)
         if not idx.isValid():
             return

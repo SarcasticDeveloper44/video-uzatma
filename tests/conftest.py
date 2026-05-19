@@ -8,6 +8,7 @@ cannot pollute the user's actual settings nor hang on offscreen modals.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -73,10 +74,8 @@ def _stub_desktop_notifications(monkeypatch):
         "video_extender.gui.main_window.notify",
         "video_extender.cli.notify",
     ):
-        try:
+        with contextlib.suppress(AttributeError, ImportError):
             monkeypatch.setattr(mod_path, lambda *a, **k: False)
-        except (AttributeError, ImportError):
-            pass
 
 
 def _has(binary: str) -> bool:
@@ -89,8 +88,7 @@ def _run(cmd: list[str]) -> None:
 
 @pytest.fixture(scope="session")
 def fixture_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    d = tmp_path_factory.mktemp("vx_fixtures")
-    return d
+    return tmp_path_factory.mktemp("vx_fixtures")
 
 
 @pytest.fixture(scope="session")

@@ -1,8 +1,11 @@
 """Settings panel: duration, mode, extender method, quality, filename template."""
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from contextlib import suppress
 from pathlib import Path
+from typing import Any
+
+from PySide6.QtCore import Signal
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -144,22 +147,15 @@ class SettingsPanel(QFrame):
                   self.quality_combo, self.codec_combo, self.encoder_combo,
                   self.fade_spin, self.filename_template,
                   self.add_radio, self.fill_radio):
-            try:
-                w.valueChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.currentIndexChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.textChanged.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
-            try:
-                w.toggled.connect(self._emit_changed)  # type: ignore[attr-defined,union-attr]
-            except AttributeError:
-                pass
+            # Heterogeneous widgets — each exposes only a subset of these signals.
+            with suppress(AttributeError):
+                w.valueChanged.connect(self._emit_changed)  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.currentIndexChanged.connect(self._emit_changed)  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.textChanged.connect(self._emit_changed)  # type: ignore[union-attr]
+            with suppress(AttributeError):
+                w.toggled.connect(self._emit_changed)  # type: ignore[union-attr]
 
     def _emit_changed(self, *args: object) -> None:
         self.changed.emit()
@@ -184,7 +180,7 @@ class SettingsPanel(QFrame):
         if listed_encoders:
             with ThreadPoolExecutor(max_workers=min(8, len(listed_encoders))) as pool:
                 results = pool.map(probe_encoder, [c.ffmpeg_encoder for _, c in listed_encoders])
-                for (_, cls), ok in zip(listed_encoders, results):
+                for (_, cls), ok in zip(listed_encoders, results, strict=True):
                     functional_map[cls.ffmpeg_encoder] = ok
 
         gpu_avail, cpu_avail, unavailable = [], [], []
@@ -228,8 +224,8 @@ class SettingsPanel(QFrame):
         if f:
             self.endcard_path.setText(f)
 
-    def extender_options(self) -> dict:
-        opts: dict = {}
+    def extender_options(self) -> dict[str, Any]:
+        opts: dict[str, Any] = {}
         if self.intro_path.text().strip():
             opts["intro"] = self.intro_path.text().strip()
         if self.outro_path.text().strip():
@@ -250,7 +246,7 @@ class SettingsPanel(QFrame):
 
     @property
     def method(self) -> str:
-        return self.method_combo.currentData()
+        return str(self.method_combo.currentData())
 
     @property
     def quality(self) -> str:
@@ -258,11 +254,12 @@ class SettingsPanel(QFrame):
 
     @property
     def video_codec(self) -> str:
-        return self.codec_combo.currentData() or "h264"
+        return str(self.codec_combo.currentData() or "h264")
 
     @property
     def encoder_override(self) -> str | None:
-        return self.encoder_combo.currentData()
+        data = self.encoder_combo.currentData()
+        return data if data is None else str(data)
 
     @property
     def max_parallel(self) -> int | None:

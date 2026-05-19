@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
     QStatusBar, QTabWidget, QVBoxLayout, QWidget,
@@ -361,7 +362,7 @@ class MainWindow(QMainWindow):
         if self.folder_picker.folder is not None:
             s.setValue("folder/last", str(self.folder_picker.folder))
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self._batch_thread is not None and self._batch_thread.isRunning():
             running = sum(1 for j in self._jobs if j.status == JobStatus.RUNNING)
             pending = sum(1 for j in self._jobs if j.status in (

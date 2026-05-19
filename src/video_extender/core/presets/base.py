@@ -18,7 +18,7 @@ class PresetParams:
     container_ext: str = "mp4"
 
 
-PRESET_REGISTRY: dict[str, type["PlatformPreset"]] = {}
+PRESET_REGISTRY: dict[str, type[PlatformPreset]] = {}
 
 
 class PlatformPreset(ABC):

@@ -185,9 +185,11 @@ class TestCrossDeviceRegistry:
                     bitrate_kbps=5000, audio_bitrate_kbps=128,
                     crf=None, gpu_index=None, threads=2,
                 )
-            except NotImplementedError:
-                raise AssertionError(f"encoder {name} still scaffold (NotImplementedError)")
-            except Exception:
+            except NotImplementedError as exc:
+                raise AssertionError(
+                    f"encoder {name} still scaffold (NotImplementedError)"
+                ) from exc
+            except Exception:  # noqa: BLE001
                 # Some encoders may raise other errors on specific inputs; we
                 # care that NotImplementedError is gone.
                 pass

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from video_extender.core.hardware import HardwareInfo
 
@@ -32,7 +32,7 @@ class EncoderArgs:
     gpu_upload_filter: str = ""
 
 
-ENCODER_REGISTRY: dict[str, type["EncoderBackend"]] = {}
+ENCODER_REGISTRY: dict[str, type[EncoderBackend]] = {}
 
 
 class EncoderBackend(ABC):
@@ -60,6 +60,6 @@ class EncoderBackend(ABC):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         raise NotImplementedError

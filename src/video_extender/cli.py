@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from typing import Any
 import sys
 from pathlib import Path
 
@@ -122,7 +123,7 @@ def _handle_list_modes(args: argparse.Namespace) -> int | None:
     return None
 
 
-def _print_preflight(report) -> None:
+def _print_preflight(report: "_preflight.PreflightReport") -> None:
     for line in report.info:
         print(f"  • {line}")
     for line in report.warnings:
@@ -131,11 +132,11 @@ def _print_preflight(report) -> None:
         print(f"  ✗ {line}", file=sys.stderr)
 
 
-def _build_filters_from_args(args: argparse.Namespace) -> tuple[list[str], dict]:
+def _build_filters_from_args(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
     """Translate CLI flags into the (filter_names, filter_options) tuple
     that JobSpec expects. aspect_convert is prepended so it runs first."""
     filters: list[str] = []
-    opts: dict = {}
+    opts: dict[str, Any] = {}
 
     if args.audio_normalize:
         filters.append("audio_normalize")
@@ -175,9 +176,9 @@ def _build_filters_from_args(args: argparse.Namespace) -> tuple[list[str], dict]
     return filters, opts
 
 
-def _build_extender_options(args: argparse.Namespace) -> dict:
+def _build_extender_options(args: argparse.Namespace) -> dict[str, Any]:
     """Collect intro/outro/end-card paths into extender_options dict."""
-    opts: dict = {}
+    opts: dict[str, Any] = {}
     if args.intro is not None:
         opts["intro"] = str(args.intro)
     if args.outro is not None:

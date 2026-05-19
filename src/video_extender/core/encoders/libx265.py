@@ -1,5 +1,6 @@
 """libx265 (CPU HEVC) — best quality/size ratio, slowest."""
 from __future__ import annotations
+from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
@@ -19,7 +20,7 @@ class Libx265(EncoderBackend):
         crf: int | None,
         gpu_index: int | None,
         threads: int,
-        extra: dict | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # HEVC is ~30% more efficient than H.264 — same visual at ~70% bitrate.
         hevc_bitrate = int(bitrate_kbps * 0.7)

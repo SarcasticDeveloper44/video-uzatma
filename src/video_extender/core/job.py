@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from video_extender.utils.ffprobe_parser import MediaInfo
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     PENDING = "pending"
     PROBING = "probing"
     QUEUED = "queued"
@@ -20,7 +20,7 @@ class JobStatus(str, Enum):
     SKIPPED = "skipped"
 
 
-class ExtendMode(str, Enum):
+class ExtendMode(StrEnum):
     ADD = "add"        # add N seconds to current duration
     FILL = "fill"      # extend up to a target total duration
 

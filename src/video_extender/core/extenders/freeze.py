@@ -1,5 +1,6 @@
 """Freeze the last frame and pad audio with silence (with optional fade-out)."""
 from __future__ import annotations
+from typing import Any
 
 from pathlib import Path
 
@@ -19,7 +20,7 @@ class FreezeExtender(ExtenderStrategy):
         target_duration: float,
         *,
         audio_fade_out_seconds: float = 1.5,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ExtenderPlan:
         # tpad clones the last frame to extend video to target duration.
         # apad pads audio with silence; afade fades audio out smoothly before silence.

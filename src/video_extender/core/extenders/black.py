@@ -1,5 +1,6 @@
 """Pad with a black screen (and silence) to reach the target duration."""
 from __future__ import annotations
+from typing import Any
 
 from pathlib import Path
 
@@ -19,7 +20,7 @@ class BlackExtender(ExtenderStrategy):
         target_duration: float,
         *,
         audio_fade_out_seconds: float = 1.5,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ExtenderPlan:
         if media.video is None:
             raise ValueError(f"No video stream in {source}")
