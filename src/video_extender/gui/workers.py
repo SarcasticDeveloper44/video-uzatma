@@ -24,21 +24,39 @@ class BatchSignals(QObject):
 class ProbeThread(QThread):
     """Discover & probe videos off the GUI thread.
 
-    Probes one video at a time and checks `isInterruptionRequested()` between
-    each, so a folder switch or window-close can stop the work mid-scan
-    instead of blocking until every file is probed.
+    Two source modes:
+      - folder mode (default): discover videos under `folder`, optionally
+        recursive.
+      - explicit-files mode: pass `explicit_files=[Path, ...]` and the
+        thread probes exactly those files (parent folder is still used as
+        the source folder for batch output).
+
+    Probes in parallel with bounded concurrency; checks
+    `isInterruptionRequested()` between completions so a folder switch or
+    window-close can stop the work mid-scan instead of blocking until
+    every file is probed.
     """
-    def __init__(self, folder: Path, recursive: bool, spec: JobSpec, signals: BatchSignals) -> None:
+    def __init__(
+        self, folder: Path, recursive: bool, spec: JobSpec,
+        signals: BatchSignals, explicit_files: list[Path] | None = None,
+    ) -> None:
         super().__init__()
         self.folder = folder
         self.recursive = recursive
         self.spec = spec
         self.signals = signals
+        self.explicit_files = explicit_files
         self.jobs: list[Job] = []
 
     def run(self) -> None:
         try:
-            sources = discover_videos(self.folder, recursive=self.recursive)
+            if self.explicit_files is not None:
+                # Filter to ensure we never probe non-video paths the caller
+                # accidentally passed in. Order is preserved.
+                from video_extender.utils.paths import is_video
+                sources = [p for p in self.explicit_files if is_video(p)]
+            else:
+                sources = discover_videos(self.folder, recursive=self.recursive)
             if not sources:
                 self.signals.error.emit("Klasörde video bulunamadı.")
                 return

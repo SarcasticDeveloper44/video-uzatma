@@ -1,4 +1,13 @@
-"""Folder picker with drag & drop support."""
+"""Source picker: a folder, a single video, or multiple videos.
+
+Drag-drop accepts:
+  - a folder       → all videos in it (recursive optional)
+  - a single video → process just that one
+  - multiple videos → process exactly that set
+
+Click-to-pick has two buttons (folder vs file) since QFileDialog can't
+mix the two modes in a single dialog.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,9 +18,12 @@ from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+from video_extender.utils.paths import is_video
+
 
 class FolderPicker(QWidget):
     folder_changed = Signal(Path)
+    files_chosen = Signal(list)         # list[Path] — explicit video files
     recursive_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -20,15 +32,20 @@ class FolderPicker(QWidget):
 
         layout = QVBoxLayout(self)
         row = QHBoxLayout()
-        self.path_label = QLabel("<i>Henüz klasör seçilmedi — klasörü buraya sürükleyebilirsin.</i>")
+        self.path_label = QLabel(
+            "<i>Klasör veya video dosyalarını buraya sürükle — ya da seç düğmelerini kullan.</i>"
+        )
         self.path_label.setStyleSheet(
             "padding: 14px; border: 2px dashed #888; border-radius: 6px;"
         )
         self.path_label.setMinimumHeight(60)
-        self.btn = QPushButton("Klasör Seç…")
-        self.btn.clicked.connect(self._pick)
+        self.btn_folder = QPushButton("Klasör Seç…")
+        self.btn_folder.clicked.connect(self._pick_folder)
+        self.btn_files = QPushButton("Video(lar) Seç…")
+        self.btn_files.clicked.connect(self._pick_files)
         row.addWidget(self.path_label, 1)
-        row.addWidget(self.btn)
+        row.addWidget(self.btn_folder)
+        row.addWidget(self.btn_files)
         layout.addLayout(row)
 
         self.recursive_cb = QCheckBox("Alt klasörleri de tara")
@@ -45,31 +62,77 @@ class FolderPicker(QWidget):
     def recursive(self) -> bool:
         return self.recursive_cb.isChecked()
 
-    def _pick(self) -> None:
+    # --- pick handlers ---
+    def _pick_folder(self) -> None:
         start = str(self._folder or Path.home())
         d = QFileDialog.getExistingDirectory(self, "Video klasörünü seç", start)
         if d:
             self._set_folder(Path(d))
 
+    def _pick_files(self) -> None:
+        start = str(self._folder or Path.home())
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Video(lar) seç", start,
+            "Video (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.flv *.wmv *.mpg "
+            "*.mpeg *.ts *.m2ts *.3gp *.ogv *.mxf *.f4v)",
+        )
+        if files:
+            self._set_files([Path(f) for f in files])
+
+    # --- internal state setters (emit appropriate signal) ---
     def _set_folder(self, p: Path) -> None:
         self._folder = p
         self.path_label.setText(f"<b>{p}</b>")
         self.folder_changed.emit(p)
 
-    # Drag & drop
+    def _set_files(self, files: list[Path]) -> None:
+        if not files:
+            return
+        # The parent of the first file becomes the "source folder" for
+        # output/state purposes. All explicit files are passed downstream.
+        self._folder = files[0].parent
+        if len(files) == 1:
+            self.path_label.setText(
+                f"<b>{files[0].name}</b><br>"
+                f"<small style='color:#888;'>{files[0].parent}</small>"
+            )
+        else:
+            preview = ", ".join(f.name for f in files[:3])
+            suffix = "…" if len(files) > 3 else ""
+            self.path_label.setText(
+                f"<b>{len(files)} video</b><br>"
+                f"<small style='color:#888;'>{preview}{suffix} — {files[0].parent}</small>"
+            )
+        self.files_chosen.emit(files)
+
+    # --- drag & drop ---
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if any(Path(u.toLocalFile()).is_dir() for u in urls):
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        urls = event.mimeData().urls()
+        # Accept if ANY url is a directory or a recognised video file.
+        for u in urls:
+            p = Path(u.toLocalFile())
+            if p.is_dir() or is_video(p):
                 event.acceptProposedAction()
                 return
         event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
-        for u in event.mimeData().urls():
-            p = Path(u.toLocalFile())
+        urls = event.mimeData().urls()
+        paths = [Path(u.toLocalFile()) for u in urls]
+        # Prefer a directory drop over a mixed/files drop: if any path is a
+        # dir, treat the whole drop as that single directory.
+        for p in paths:
             if p.is_dir():
                 self._set_folder(p)
                 event.acceptProposedAction()
                 return
+        # Otherwise collect every video file in the drop.
+        files = [p for p in paths if is_video(p)]
+        if files:
+            self._set_files(files)
+            event.acceptProposedAction()
+            return
         event.ignore()

@@ -313,6 +313,41 @@ class TestFolderPicker:
         assert fp.folder == tmp_path
         assert received == [tmp_path]
 
+    def test_set_files_emits_signal(self, qapp, tmp_path, vertical_3s) -> None:
+        """Dropping or picking explicit files emits files_chosen, not folder_changed."""
+        # Stage real video files so they pass the is_video() check
+        f1 = tmp_path / "a.mp4"
+        f1.write_bytes(vertical_3s.read_bytes())
+        f2 = tmp_path / "b.mp4"
+        f2.write_bytes(vertical_3s.read_bytes())
+        fp = FolderPicker()
+        files_received = []
+        folder_received = []
+        fp.files_chosen.connect(lambda lst: files_received.append(lst))
+        fp.folder_changed.connect(lambda p: folder_received.append(p))
+        fp._set_files([f1, f2])
+        assert len(files_received) == 1
+        assert files_received[0] == [f1, f2]
+        assert folder_received == []  # folder signal NOT emitted for file drops
+        # The internal _folder is set to parent for downstream output dir use
+        assert fp.folder == tmp_path
+        # Label reflects multi-file selection
+        assert "2 video" in fp.path_label.text()
+
+    def test_set_files_single_video_label(self, qapp, tmp_path, vertical_3s) -> None:
+        f = tmp_path / "only.mp4"
+        f.write_bytes(vertical_3s.read_bytes())
+        fp = FolderPicker()
+        fp._set_files([f])
+        assert "only.mp4" in fp.path_label.text()
+
+    def test_empty_files_no_signal(self, qapp) -> None:
+        fp = FolderPicker()
+        received = []
+        fp.files_chosen.connect(lambda lst: received.append(lst))
+        fp._set_files([])
+        assert received == []
+
 
 class TestSettingsPersistence:
     """MainWindow saves/restores last-used spec and window state via QSettings.

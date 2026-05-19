@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         """Connect every widget signal to its MainWindow handler."""
         self.folder_picker.folder_changed.connect(self._on_folder_chosen)
+        self.folder_picker.files_chosen.connect(self._on_files_chosen)
 
         self.start_btn.clicked.connect(self._start_batch)
         self.cancel_btn.clicked.connect(self._cancel_batch)
@@ -204,6 +205,25 @@ class MainWindow(QMainWindow):
         t.finished.connect(lambda: self._on_probe_done(t))
         t.start()
         self.statusBar().showMessage(f"{folder} taranıyor…")
+
+    def _on_files_chosen(self, files: list[Path]) -> None:
+        """User dropped (or picked) one or more video files directly. Skip
+        the folder-wide scan; probe only the explicit set."""
+        if not files:
+            return
+        self.video_list.clear_rows()
+        self._jobs = []
+        spec = self._gather_spec()
+        if self._probe_thread and self._probe_thread.isRunning():
+            self._probe_thread.requestInterruption()
+            self._probe_thread.wait(1000)
+        # Source folder for batch I/O is the parent of the first file.
+        source_folder = files[0].parent
+        t = ProbeThread(source_folder, False, spec, self.signals, explicit_files=files)
+        self._probe_thread = t
+        t.finished.connect(lambda: self._on_probe_done(t))
+        t.start()
+        self.statusBar().showMessage(f"{len(files)} video inceleniyor…")
 
     def _on_probe_done(self, t: ProbeThread) -> None:
         self._jobs = t.jobs
@@ -586,7 +606,7 @@ class MainWindow(QMainWindow):
         self.video_list.clear_rows()
         self.folder_picker._folder = None
         self.folder_picker.path_label.setText(
-            "<i>Henüz klasör seçilmedi — klasörü buraya sürükleyebilirsin.</i>"
+            "<i>Klasör veya video dosyalarını buraya sürükle — ya da seç düğmelerini kullan.</i>"
         )
         self.folder_picker.recursive_cb.setChecked(False)
 
