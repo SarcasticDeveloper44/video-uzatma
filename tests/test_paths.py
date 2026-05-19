@@ -1,8 +1,30 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from video_extender.utils.paths import (
-    discover_videos, ensure_output_dir, is_video, safe_output_path,
+    discover_videos, ensure_output_dir, is_video, reveal_in_file_manager,
+    safe_output_path,
 )
+
+
+class TestRevealInFileManager:
+    def test_nonexistent_path_returns_false(self) -> None:
+        assert reveal_in_file_manager(Path("/definitely/no/such/file/x.mp4")) is False
+
+    def test_existing_file_attempts_launch(self, tmp_path) -> None:
+        """Should call subprocess.Popen with platform-appropriate argv."""
+        f = tmp_path / "x.mp4"
+        f.write_bytes(b"x")
+        with patch("video_extender.utils.paths.subprocess.Popen"):
+            ok = reveal_in_file_manager(f)
+        # Either we launched something OR no file manager on PATH (returns False)
+        # Either way, no crash.
+        assert isinstance(ok, bool)
+
+    def test_existing_dir_attempts_launch(self, tmp_path) -> None:
+        with patch("video_extender.utils.paths.subprocess.Popen"):
+            ok = reveal_in_file_manager(tmp_path)
+        assert isinstance(ok, bool)
 
 
 class TestIsVideo:

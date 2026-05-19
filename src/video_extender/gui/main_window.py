@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.video_list.cellDoubleClicked.connect(self._on_row_double_clicked)
         self.video_list.row_remove_requested.connect(self._on_remove_row)
         self.video_list.row_retry_requested.connect(self._on_retry_row)
+        self.video_list.row_reveal_requested.connect(self._on_reveal_row)
+        self.video_list.row_show_log_requested.connect(self._on_show_log_row)
 
     # -----------------------------------------------------------------
     # Spec gathering / applying
@@ -563,6 +565,28 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(bool(self._jobs))
         self._refresh_summary()
 
+    def _on_reveal_row(self, source: Path) -> None:
+        """Right-click → 'Çıktıyı klasörde göster' on a completed/skipped row."""
+        job = next((j for j in self._jobs if j.source == source), None)
+        if job is None or job.output is None or not job.output.exists():
+            QMessageBox.information(
+                self, "Çıktı yok",
+                "Bu video için çıktı dosyası henüz oluşmamış.",
+            )
+            return
+        from video_extender.utils.paths import reveal_in_file_manager
+        if not reveal_in_file_manager(job.output):
+            QMessageBox.warning(
+                self, "Dosya yöneticisi açılamadı",
+                f"OS'in dosya yöneticisi başlatılamadı.\n\nÇıktı yolu:\n{job.output}",
+            )
+
+    def _on_show_log_row(self, source: Path) -> None:
+        """Right-click → 'ffmpeg log'unu göster'."""
+        job = next((j for j in self._jobs if j.source == source), None)
+        if job is not None:
+            self._show_job_log(job)
+
     def _on_row_double_clicked(self, row: int, _col: int) -> None:
         if row < 0:
             return
@@ -573,8 +597,19 @@ class MainWindow(QMainWindow):
         if source is None:
             return
         job = next((j for j in self._jobs if j.source == source), None)
-        if job is not None:
-            self._show_job_log(job)
+        if job is None:
+            return
+        # UX: most useful default is to reveal the produced output in the OS
+        # file manager when the job is done. For other states the ffmpeg
+        # log is the right tool (debugging in-progress / failed jobs).
+        if (job.status == JobStatus.COMPLETED
+                and job.output is not None and job.output.exists()):
+            from video_extender.utils.paths import reveal_in_file_manager
+            if reveal_in_file_manager(job.output):
+                return
+            # Fallback: file manager launch failed (very rare) — fall through
+            # to the log dialog so the user still sees something.
+        self._show_job_log(job)
 
     def _show_job_log(self, job: Job) -> None:
         # Compose details: status + error + ffmpeg log (if any)

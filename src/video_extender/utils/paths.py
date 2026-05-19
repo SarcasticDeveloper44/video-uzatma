@@ -1,8 +1,11 @@
 """Filesystem helpers: video discovery, output paths, temp dirs."""
 from __future__ import annotations
 
-from pathlib import Path
+import platform
+import shutil
+import subprocess
 from collections.abc import Iterable
+from pathlib import Path
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".flv",
@@ -26,6 +29,61 @@ def ensure_output_dir(source_folder: Path, name: str = "output") -> Path:
     out = source_folder / name
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+# Linux file managers that support a "select this file" command-line flag.
+# In preference order — first one found on PATH wins.
+_LINUX_FILE_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("nautilus", ("--select",)),     # GNOME / Ubuntu default
+    ("dolphin",  ("--select",)),     # KDE Plasma
+    ("nemo",     ()),                # Cinnamon (auto-selects when given a file)
+    ("thunar",   ()),                # XFCE (opens parent, no select)
+    ("pcmanfm",  ()),                # LXDE/LXQt
+    ("caja",     ()),                # MATE
+)
+
+
+def reveal_in_file_manager(path: Path) -> bool:
+    """Open the OS file manager focused on `path` (file or folder).
+
+    On macOS the file is selected/highlighted in Finder (-R flag). On Windows
+    Explorer opens with the file pre-selected (/select,<path>). On Linux we
+    try the running desktop's file manager with its select-flag, falling back
+    to `xdg-open` on the parent folder.
+
+    Returns True iff a process was successfully launched. Best-effort —
+    failures are non-fatal because revealing a path is a UX nicety, not a
+    critical operation.
+    """
+    if not path.exists():
+        return False
+    sys_name = platform.system()
+    try:
+        if sys_name == "Windows":
+            # Quirky comma syntax — no space before path, that's the Explorer rule.
+            subprocess.Popen(["explorer", f"/select,{path}"])
+            return True
+        if sys_name == "Darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+            return True
+        # Linux: try a known file manager first; fall back to xdg-open.
+        for fm, select_args in _LINUX_FILE_MANAGERS:
+            if shutil.which(fm) is None:
+                continue
+            argv = [fm, *select_args, str(path)] if select_args else [fm, str(path)]
+            try:
+                subprocess.Popen(argv)
+                return True
+            except (FileNotFoundError, OSError):
+                continue
+        # Last resort: open the containing folder.
+        target = path.parent if path.is_file() else path
+        if shutil.which("xdg-open") is not None:
+            subprocess.Popen(["xdg-open", str(target)])
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def safe_output_path(out_dir: Path, source: Path, template: str, **kwargs: str) -> Path:

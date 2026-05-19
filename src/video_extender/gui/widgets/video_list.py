@@ -62,6 +62,8 @@ class VideoListWidget(QTableWidget):
     row_open_log = Signal(Path)
     row_remove_requested = Signal(Path)  # emits source path of row to remove
     row_retry_requested = Signal(Path)   # emits source path of failed row to retry
+    row_reveal_requested = Signal(Path)  # emits source path; show output in file mgr
+    row_show_log_requested = Signal(Path)  # explicit "show ffmpeg log" action
 
     COLS = ["Dosya", "Süre", "Çözünürlük", "Durum", "İlerleme", "Hız", "ETA", "Boyut", "Worker"]
 
@@ -92,6 +94,8 @@ class VideoListWidget(QTableWidget):
         status_item = self.item(row, 3)
         status_text = status_item.text() if status_item else ""
         menu = QMenu(self)
+
+        # State-specific primary action
         if status_text == STATUS_TEXT[JobStatus.FAILED]:
             retry = QAction("Bu video'yu yeniden dene", self)
             retry.triggered.connect(lambda: self.row_retry_requested.emit(source))
@@ -100,9 +104,21 @@ class VideoListWidget(QTableWidget):
             remove = QAction("Bu video'yu listeden çıkar", self)
             remove.triggered.connect(lambda: self.row_remove_requested.emit(source))
             menu.addAction(remove)
-        else:
-            return  # running/completed/cancelled/skipped — no actions
-        menu.exec(self.viewport().mapToGlobal(pos))
+        elif status_text in {STATUS_TEXT[JobStatus.COMPLETED], STATUS_TEXT[JobStatus.SKIPPED]}:
+            reveal = QAction("Çıktıyı klasörde göster", self)
+            reveal.triggered.connect(lambda: self.row_reveal_requested.emit(source))
+            menu.addAction(reveal)
+
+        # Always-available secondary: show ffmpeg log (useful in every state
+        # except "never ran" — for which the log won't exist anyway).
+        if status_text != STATUS_TEXT[JobStatus.PENDING]:
+            menu.addSeparator()
+            show_log = QAction("ffmpeg log'unu göster", self)
+            show_log.triggered.connect(lambda: self.row_show_log_requested.emit(source))
+            menu.addAction(show_log)
+
+        if menu.actions():
+            menu.exec(self.viewport().mapToGlobal(pos))
 
     def remove_row_for(self, source: Path) -> bool:
         """Remove the row matching `source`. Re-indexes the source→row map."""
