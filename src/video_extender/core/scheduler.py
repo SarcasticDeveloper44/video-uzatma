@@ -162,7 +162,12 @@ def _plan_with_override(
             if override in gpu.encoders:
                 gpu_idx = idx
                 break
-        sessions = _detect_nvenc_session_limit() if override.endswith("_nvenc") else 1
+        # Same lag-avoidance as the multi-GPU loop: skip session probe on
+        # summary-preview calls (probe_gpu=False).
+        if override.endswith("_nvenc"):
+            sessions = _detect_nvenc_session_limit() if probe_gpu else _NVENC_DEFAULT_SESSIONS
+        else:
+            sessions = 1
         sessions = min(sessions, job_count)
         for s in range(sessions):
             label_suffix = f"/session{s+1}" if sessions > 1 else ""
@@ -315,7 +320,15 @@ def plan(
 
             # Session count: NVIDIA's NVENC chip supports concurrent sessions;
             # other GPU encoders typically serialize internally — 1 slot each.
-            sessions = _detect_nvenc_session_limit() if gpu.vendor == "nvidia" else 1
+            # `_detect_nvenc_session_limit` spawns several ffmpeg probes so
+            # we ONLY run it for the real scheduling decision (probe_gpu=True).
+            # For UI summary previews (probe_gpu=False) the conservative
+            # default keeps the call sub-millisecond and avoids per-keystroke
+            # lag in the settings panel.
+            if gpu.vendor == "nvidia":
+                sessions = _detect_nvenc_session_limit() if probe_gpu else _NVENC_DEFAULT_SESSIONS
+            else:
+                sessions = 1
             for s in range(sessions):
                 label_suffix = f"/session{s+1}" if sessions > 1 else ""
                 slots.append(WorkerSlot(

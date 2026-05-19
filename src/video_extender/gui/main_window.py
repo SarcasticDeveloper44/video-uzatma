@@ -549,11 +549,18 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Hata", msg)
 
     def _refresh_summary(self) -> None:
+        import time
+        t0 = time.monotonic()
         try:
             spec = self._gather_spec()
             self.summary_label.setText(self._build_batch_summary_html(spec))
         except Exception:  # noqa: BLE001
             self.summary_label.setText("")
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        # Anything above ~50 ms shows up as visible lag on settings changes.
+        # Log so we have a diagnostic trail if performance regresses later.
+        if elapsed_ms > 50:
+            log.info("_refresh_summary slow: %.0f ms", elapsed_ms)
 
     def _build_batch_summary_html(self, spec: JobSpec) -> str:
         """Multi-line pre-batch breakdown rendered as HTML in the summary label.
