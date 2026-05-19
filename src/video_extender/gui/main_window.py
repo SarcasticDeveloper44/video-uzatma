@@ -357,6 +357,15 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Hata", str(exc))
             return
+        # Validate extender-specific requirements BEFORE submitting to the
+        # batch runner. Mirrors what the CLI does in cli.main(); without
+        # this the encode crashes deep inside build_job_command with a
+        # ValueError that lands as a per-job FAILED row — far worse UX
+        # than a single dialog.
+        missing = self._validate_extender_requirements(spec)
+        if missing is not None:
+            QMessageBox.warning(self, "Eksik alan", missing)
+            return
         # Preflight before start
         report = _preflight.run(source_folder=self.folder_picker.folder, output_subdir=spec.output_subdir)
         if not report.ok:
@@ -382,6 +391,36 @@ class MainWindow(QMainWindow):
         self.retry_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.pause_btn.setEnabled(True)
+
+    def _validate_extender_requirements(self, spec: JobSpec) -> str | None:
+        """Return a Turkish error string when the chosen extender is missing
+        required inputs (image for image_card, outro for intro_outro);
+        return None when everything is valid."""
+        opts = spec.extender_options or {}
+        if spec.extender_name == "image_card":
+            image = opts.get("image", "")
+            if not image:
+                return (
+                    "Yöntem 'Bitiş kartı (resim)' seçili ama 'Bitiş kartı' "
+                    "alanı boş.\n\nUzatma sekmesinde bir PNG/JPG seç ya da "
+                    "yöntemi değiştir."
+                )
+            if not Path(image).exists():
+                return f"Bitiş kartı dosyası bulunamadı:\n{image}"
+        elif spec.extender_name == "intro_outro":
+            outro = opts.get("outro", "")
+            if not outro:
+                return (
+                    "Yöntem 'Intro/Outro klibi ekle' seçili ama 'Outro klip' "
+                    "alanı boş.\n\nUzatma sekmesinde bir video seç (intro "
+                    "opsiyonel, outro zorunlu) ya da yöntemi değiştir."
+                )
+            if not Path(outro).exists():
+                return f"Outro klibi bulunamadı:\n{outro}"
+            intro = opts.get("intro", "")
+            if intro and not Path(intro).exists():
+                return f"Intro klibi bulunamadı:\n{intro}"
+        return None
 
     def _cancel_batch(self) -> None:
         if self._batch_thread is not None:

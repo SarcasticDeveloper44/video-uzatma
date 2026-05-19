@@ -227,7 +227,47 @@ class TestResetFlow:
 
 
 # ===========================================================================
-# SCENARIO 6 — status filter hides rows that don't match
+# SCENARIO 7 — extender requirements validation blocks Başlat (image_card/intro_outro)
+# ===========================================================================
+class TestExtenderRequirementsValidation:
+    def test_image_card_missing_image_is_blocked(self, main_window, vertical_3s, tmp_path) -> None:
+        """image_card with no end-card path must surface a friendly error
+        BEFORE submitting to the batch runner (regression from a user report
+        where the GUI used to crash inside build_job_command with a raw
+        ValueError after starting the encode)."""
+        _stage_clip(tmp_path / "a.mp4", vertical_3s)
+        _drop_folder(main_window, tmp_path, expected_count=1)
+        # Set method to image_card without filling the end-card field
+        idx = main_window.settings_panel.method_combo.findData("image_card")
+        main_window.settings_panel.method_combo.setCurrentIndex(idx)
+        # The end-card path is left blank
+        spec = main_window._gather_spec()
+        error = main_window._validate_extender_requirements(spec)
+        assert error is not None
+        assert "Bitiş kartı" in error
+
+    def test_intro_outro_missing_outro_is_blocked(self, main_window, vertical_3s, tmp_path) -> None:
+        _stage_clip(tmp_path / "a.mp4", vertical_3s)
+        _drop_folder(main_window, tmp_path, expected_count=1)
+        idx = main_window.settings_panel.method_combo.findData("intro_outro")
+        main_window.settings_panel.method_combo.setCurrentIndex(idx)
+        spec = main_window._gather_spec()
+        error = main_window._validate_extender_requirements(spec)
+        assert error is not None
+        assert "Outro" in error
+
+    def test_image_card_with_valid_image_passes(self, main_window, vertical_3s, end_card_png, tmp_path) -> None:
+        _stage_clip(tmp_path / "a.mp4", vertical_3s)
+        _drop_folder(main_window, tmp_path, expected_count=1)
+        idx = main_window.settings_panel.method_combo.findData("image_card")
+        main_window.settings_panel.method_combo.setCurrentIndex(idx)
+        main_window.settings_panel.endcard_path.setText(str(end_card_png))
+        spec = main_window._gather_spec()
+        assert main_window._validate_extender_requirements(spec) is None
+
+
+# ===========================================================================
+# SCENARIO 8 — status filter hides rows that don't match
 # ===========================================================================
 class TestStatusFilterFlow:
     def test_filter_failed_hides_completed_rows(self, main_window, vertical_3s, tmp_path) -> None:
