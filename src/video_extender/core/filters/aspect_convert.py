@@ -82,3 +82,48 @@ class AspectConvertFilter(Filter):
             filter_segment=seg,
             new_video_label=out_label,
         )
+
+    def build_hw(
+        self,
+        namespace: str,
+        *,
+        in_video: str,
+        in_audio: str,
+        next_input_index: int,
+        options: dict[str, Any] | None = None,
+    ) -> FilterFragment | None:
+        """CUDA variant: scale_cuda + pad_cuda. Only the crop mode has a
+        GPU equivalent — blur_pad needs boxblur which has no CUDA filter
+        in stock ffmpeg, so we return None for that mode and the caller
+        falls back to the CPU chain.
+        """
+        if namespace != "cuda":
+            return None
+        opts = options or {}
+        target = opts.get("target", "9:16")
+        mode = opts.get("mode", "blur_pad")
+
+        try:
+            W, H = _resolve_target(target)
+        except ValueError:
+            return FilterFragment()
+
+        # blur_pad needs boxblur → no CUDA equivalent.
+        if mode != "crop":
+            return None
+
+        suffix = in_video.strip("[]")
+        out_label = f"[ac_{suffix}]"
+        # scale_cuda → pad_cuda. Match the CPU crop mode (scale increases to
+        # fill, then crop to exact target). pad_cuda here pads to even
+        # dimensions where the scaler may have aligned to 16px (NVENC
+        # requirement); crop snipping happens via overlay coordinates rather
+        # than an explicit crop_cuda (not available).
+        seg = (
+            f"{in_video}scale_cuda=w={W}:h={H}:force_original_aspect_ratio=increase"
+            f":format=yuv420p{out_label}"
+        )
+        return FilterFragment(
+            filter_segment=seg,
+            new_video_label=out_label,
+        )

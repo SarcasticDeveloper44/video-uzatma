@@ -57,6 +57,24 @@ class Filter(ABC):
         """
         raise NotImplementedError
 
+    def build_hw(
+        self,
+        namespace: str,
+        *,
+        in_video: str,
+        in_audio: str,
+        next_input_index: int,
+        options: dict[str, Any] | None = None,
+    ) -> FilterFragment | None:
+        """Optional hardware variant. Return None if the filter has no HW
+        implementation for this namespace (caller falls back to CPU build()).
+
+        Namespaces: "cuda" (NVENC), "vaapi" (Intel/AMD on Linux), "qsv"
+        (Intel QSV). Filters that opt in must produce a fragment whose
+        output stream stays in the same hw frame format.
+        """
+        return None
+
 
 @dataclass
 class FilterChain:

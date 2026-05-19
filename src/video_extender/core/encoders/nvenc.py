@@ -27,6 +27,7 @@ class NvencH264(EncoderBackend):
     label = "NVIDIA NVENC H.264 (GPU)"
     ffmpeg_encoder = "h264_nvenc"
     kind = "gpu"
+    hw_filter_namespace = "cuda"
 
     def build_args(
         self,
@@ -70,6 +71,7 @@ class NvencHevc(EncoderBackend):
     ffmpeg_encoder = "hevc_nvenc"
     kind = "gpu"
     codec = "hevc"
+    hw_filter_namespace = "cuda"
 
     def build_args(
         self,

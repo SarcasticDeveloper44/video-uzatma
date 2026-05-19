@@ -41,6 +41,11 @@ class EncoderBackend(ABC):
     ffmpeg_encoder: ClassVar[str] = "" # ffmpeg encoder name, e.g. "h264_nvenc"
     kind: ClassVar[str] = "cpu"        # "gpu" | "cpu"
     codec: ClassVar[str] = "h264"      # "h264" | "hevc" | "av1" | "vp9"
+    # Hardware filter namespace the encoder belongs to. Filters that ship a
+    # matching `build_hw(namespace=…)` implementation can opt into GPU-side
+    # processing for this encoder. Empty = no HW filter path (encoder still
+    # accepts CPU frames via gpu_upload_filter if needed).
+    hw_filter_namespace: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)

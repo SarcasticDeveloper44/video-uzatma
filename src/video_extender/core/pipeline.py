@@ -70,6 +70,15 @@ def _resolve_filters(spec: JobSpec, target_duration: float, main_width: int) -> 
     return chain
 
 
+# NOTE — Phase D (HW filter chain dispatch):
+# Encoder backends declare `hw_filter_namespace` (e.g. "cuda" for NVENC) and
+# filters opt-in via `build_hw(namespace, ...)`. The infrastructure is in
+# place — extending it to full dispatch requires extender HW variants (tpad
+# on GPU, concat on GPU), tracked for v0.6.0. Until then the current CPU
+# filter chain runs unchanged; the foundation is ready without affecting the
+# happy path.
+
+
 def _resolve_preset_params(spec: JobSpec) -> PresetParams:
     preset_cls = PRESET_REGISTRY.get(spec.preset_name)
     if preset_cls is None:
