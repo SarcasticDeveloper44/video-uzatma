@@ -32,12 +32,17 @@ def main() -> int:
     # terminal that spawned it.
     win.raise_()
     win.activateWindow()
-    log.info("GUI hazır (pencere açıldı).")
+    log.info(
+        "GUI hazır (pencere açıldı). Geometry: %dx%d at (%d,%d), visible=%s",
+        win.width(), win.height(), win.x(), win.y(), win.isVisible(),
+    )
     try:
-        return app.exec()
+        rc = app.exec()
     except KeyboardInterrupt:
         log.info("Ctrl+C alındı, kapatılıyor…")
         return 130
+    log.info("Qt event loop exited (rc=%d).", rc)
+    return rc
 
 
 if __name__ == "__main__":

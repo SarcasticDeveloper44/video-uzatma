@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
     QStatusBar, QTabWidget, QVBoxLayout, QWidget,
@@ -23,7 +23,10 @@ from video_extender.gui.widgets.profiles_panel import ProfilesPanel
 from video_extender.gui.widgets.settings_panel import SettingsPanel
 from video_extender.gui.widgets.video_list import VideoListWidget
 from video_extender.gui.workers import BatchSignals, BatchThread, ProbeThread
+from video_extender.utils import logging as _logging
 from video_extender.utils.notify import notify
+
+log = _logging.get("gui.main")
 
 
 class MainWindow(QMainWindow):
@@ -339,6 +342,22 @@ class MainWindow(QMainWindow):
         geom = s.value("window/geometry")
         if geom is not None:
             self.restoreGeometry(geom)
+            # Sanity-check: a saved geometry can place the window off-screen
+            # (different monitor setup, scaling changed, hibernate quirk).
+            # If the restored rect is outside every available screen, ignore
+            # it and use the construction-time default (1100x720 centered).
+            if not self._geometry_visible_on_any_screen():
+                log.warning(
+                    "Saved geometry (%dx%d at %d,%d) falls off all screens — "
+                    "resetting to default.", self.width(), self.height(),
+                    self.x(), self.y(),
+                )
+                self.resize(1100, 720)
+                # Move to top-left of primary screen as a safe default.
+                screen = QGuiApplication.primaryScreen()
+                if screen is not None:
+                    geo = screen.availableGeometry()
+                    self.move(geo.x() + 100, geo.y() + 100)
         state = s.value("window/state")
         if state is not None:
             self.restoreState(state)
@@ -368,7 +387,18 @@ class MainWindow(QMainWindow):
         if self.folder_picker.folder is not None:
             s.setValue("folder/last", str(self.folder_picker.folder))
 
+    def _geometry_visible_on_any_screen(self) -> bool:
+        """Whether the current window geometry overlaps any available screen."""
+        win_rect = self.geometry()
+        if win_rect.width() <= 0 or win_rect.height() <= 0:
+            return False
+        for screen in QGuiApplication.screens():
+            if screen.availableGeometry().intersects(win_rect):
+                return True
+        return False
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        log.info("Pencere kapatma isteği alındı (closeEvent).")
         if self._batch_thread is not None and self._batch_thread.isRunning():
             running = sum(1 for j in self._jobs if j.status == JobStatus.RUNNING)
             pending = sum(1 for j in self._jobs if j.status in (

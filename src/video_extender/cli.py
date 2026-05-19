@@ -37,6 +37,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    version=f"video-extender {__version__}")
     p.add_argument("--doctor", action="store_true",
                    help="Sistem sağlık raporu: ffmpeg, donanım, encoder'lar, disk. Çıkış.")
+    p.add_argument("--reset-settings", action="store_true",
+                   help="Kaydedilmiş pencere geometrisi, son spec ve son klasörü sil. GUI hatalı açılırsa çare.")
     p.add_argument("--folder", "-f", type=Path, required=False,
                    help="İşlenecek videoların bulunduğu klasör.")
     p.add_argument("--recursive", "-r", action="store_true", help="Alt klasörlere in.")
@@ -159,11 +161,35 @@ def _run_doctor() -> int:
     return 0
 
 
+def _run_reset_settings() -> int:
+    """Clear persisted GUI state (QSettings) — used when the GUI fails to
+    appear because saved window geometry is off-screen, settings file is
+    corrupt, etc. CLI-only path so it works even without a usable GUI.
+    """
+    try:
+        from PySide6.QtCore import QSettings
+    except ImportError:
+        print("HATA: PySide6 yüklü değil; reset için GUI bağımlılığı gerekli.",
+              file=sys.stderr)
+        return 2
+    s = QSettings("video-extender", "video-extender")
+    keys_before = list(s.allKeys())
+    s.clear()
+    s.sync()
+    # Try to locate the file we cleared so the user sees confirmation.
+    filename = s.fileName()
+    print(f"QSettings temizlendi: {filename}")
+    print(f"Silinen anahtarlar ({len(keys_before)}): {', '.join(keys_before) or '(yok)'}")
+    return 0
+
+
 def _handle_list_modes(args: argparse.Namespace) -> int | None:
     """If any --list-* flag is set, print the table and return an exit code.
     Returns None when no listing mode is active, signalling main to continue."""
     if args.doctor:
         return _run_doctor()
+    if args.reset_settings:
+        return _run_reset_settings()
     if args.list_presets:
         for k, preset_cls in sorted(PRESET_REGISTRY.items()):
             print(f"  {k:14s} {preset_cls.label}")
