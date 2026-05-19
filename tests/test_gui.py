@@ -331,6 +331,15 @@ class TestFolderPicker:
         assert fp.folder == tmp_path
         assert received == [tmp_path]
 
+    def test_single_select_button(self, qapp) -> None:
+        """Picker exposes ONE 'Seç…' button (folder vs file is chosen via a
+        popup menu). The two-button design from v0.7.0 was unified in v0.9.1."""
+        fp = FolderPicker()
+        assert hasattr(fp, "btn_select")
+        assert not hasattr(fp, "btn_folder")
+        assert not hasattr(fp, "btn_files")
+        assert "Seç" in fp.btn_select.text()
+
     def test_set_files_emits_signal(self, qapp, tmp_path, vertical_3s) -> None:
         """Dropping or picking explicit files emits files_chosen, not folder_changed."""
         # Stage real video files so they pass the is_video() check

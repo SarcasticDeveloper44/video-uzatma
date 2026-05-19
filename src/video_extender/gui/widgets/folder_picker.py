@@ -5,17 +5,20 @@ Drag-drop accepts:
   - a single video → process just that one
   - multiple videos → process exactly that set
 
-Click-to-pick has two buttons (folder vs file) since QFileDialog can't
-mix the two modes in a single dialog.
+A single "Seç…" button shows a popup menu so the user picks the mode
+(folder vs file) without us cluttering the layout with two buttons.
+QFileDialog itself doesn't support mixed file+dir selection in native
+mode, so this menu indirection is the clean compromise.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtCore import QPoint, Signal
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from video_extender.utils.paths import is_video
@@ -39,13 +42,11 @@ class FolderPicker(QWidget):
             "padding: 14px; border: 2px dashed #888; border-radius: 6px;"
         )
         self.path_label.setMinimumHeight(60)
-        self.btn_folder = QPushButton("Klasör Seç…")
-        self.btn_folder.clicked.connect(self._pick_folder)
-        self.btn_files = QPushButton("Video(lar) Seç…")
-        self.btn_files.clicked.connect(self._pick_files)
+        self.btn_select = QPushButton("Seç ▾")
+        self.btn_select.setToolTip("Klasör veya video dosyaları seç")
+        self.btn_select.clicked.connect(self._show_select_menu)
         row.addWidget(self.path_label, 1)
-        row.addWidget(self.btn_folder)
-        row.addWidget(self.btn_files)
+        row.addWidget(self.btn_select)
         layout.addLayout(row)
 
         self.recursive_cb = QCheckBox("Alt klasörleri de tara")
@@ -63,6 +64,23 @@ class FolderPicker(QWidget):
         return self.recursive_cb.isChecked()
 
     # --- pick handlers ---
+    def _show_select_menu(self) -> None:
+        """Popup beneath the Seç… button. Two actions: folder mode or file mode.
+        Lets us keep a single button while exposing the two QFileDialog APIs
+        Qt provides (no native dialog supports mixed file+dir selection)."""
+        menu = QMenu(self)
+        folder_action = QAction("Klasör seç…", menu)
+        files_action = QAction("Video(lar) seç…", menu)
+        menu.addAction(folder_action)
+        menu.addAction(files_action)
+        # Anchor the menu just below the button.
+        anchor = self.btn_select.mapToGlobal(QPoint(0, self.btn_select.height()))
+        chosen = menu.exec(anchor)
+        if chosen is folder_action:
+            self._pick_folder()
+        elif chosen is files_action:
+            self._pick_files()
+
     def _pick_folder(self) -> None:
         start = str(self._folder or Path.home())
         d = QFileDialog.getExistingDirectory(self, "Video klasörünü seç", start)
