@@ -562,6 +562,32 @@ class BatchRunner:
             for r in self._runners:
                 r.cancel()
 
+    def pause(self) -> int:
+        """SIGSTOP every running ffmpeg subprocess. Returns the number of
+        processes successfully paused. Unix-only — Windows lacks a portable
+        suspend primitive (would need NtSuspendProcess via ctypes)."""
+        paused = 0
+        with self._lock:
+            for r in self._runners:
+                if r.pause():
+                    paused += 1
+        return paused
+
+    def resume_workers(self) -> int:
+        """SIGCONT every paused ffmpeg subprocess. Returns the count
+        successfully resumed.
+
+        (Method name avoids clashing with the BatchRunner.resume *attribute*
+        which controls resume-from-state behaviour; the two concepts share
+        the word but mean different things in this codebase.)
+        """
+        resumed = 0
+        with self._lock:
+            for r in self._runners:
+                if r.resume():
+                    resumed += 1
+        return resumed
+
     def run(self) -> list[Job]:
         # Meta Mode hard-overrides codec to H.264 (some HEVC paths trigger
         # ad rejection); rewrite spec before scheduling so the right encoder

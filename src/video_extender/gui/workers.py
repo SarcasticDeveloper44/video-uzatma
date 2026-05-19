@@ -126,3 +126,9 @@ class BatchThread(QThread):
     def cancel(self) -> None:
         if self._runner is not None:
             self._runner.cancel()
+
+    def pause_workers(self) -> int:
+        return self._runner.pause() if self._runner is not None else 0
+
+    def resume_workers(self) -> int:
+        return self._runner.resume_workers() if self._runner is not None else 0

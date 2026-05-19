@@ -219,3 +219,31 @@ class FFmpegRunner:
             if self._proc is not None and self._proc.poll() is None:
                 with contextlib.suppress(OSError):
                     self._proc.terminate()
+
+    def pause(self) -> bool:
+        """Suspend the encoder subprocess. SIGSTOP on Unix; on Windows
+        falls back to no-op (no portable pause primitive — would need
+        NtSuspendProcess). Returns True on success."""
+        with self._lock:
+            proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            import signal
+            proc.send_signal(signal.SIGSTOP)
+            return True
+        except (AttributeError, OSError, ValueError):
+            return False
+
+    def resume(self) -> bool:
+        """Resume a paused encoder subprocess (SIGCONT)."""
+        with self._lock:
+            proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            import signal
+            proc.send_signal(signal.SIGCONT)
+            return True
+        except (AttributeError, OSError, ValueError):
+            return False

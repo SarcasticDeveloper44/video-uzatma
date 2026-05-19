@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence, QShortcut,
+)
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
-    QSplitter, QStatusBar, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,
+    QPushButton, QSplitter, QStatusBar, QStyle, QSystemTrayIcon, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from video_extender.core import config as _config
@@ -41,6 +44,7 @@ class MainWindow(QMainWindow):
         # `True` once the user has explicitly clicked a preset choice — after
         # that we never override their selection via auto-detection.
         self._user_preset_chosen = False
+        self._batch_paused = False
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -55,6 +59,7 @@ class MainWindow(QMainWindow):
 
         self._wire_signals()
         self._wire_shortcuts()
+        self._setup_tray_icon()
         self._refresh_summary()
         self._run_initial_preflight()
         # Restore last-used spec + window geometry AFTER preflight so any
@@ -121,10 +126,13 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("Başlat")
         self.start_btn.setMinimumWidth(140)
         self.start_btn.setEnabled(False)
+        self.pause_btn = QPushButton("Duraklat")
+        self.pause_btn.setEnabled(False)
         self.cancel_btn = QPushButton("İptal")
         self.cancel_btn.setEnabled(False)
         action_row.addWidget(self.summary_label, 1)
         action_row.addWidget(self.retry_btn)
+        action_row.addWidget(self.pause_btn)
         action_row.addWidget(self.cancel_btn)
         action_row.addWidget(self.start_btn)
         return action_row
@@ -136,6 +144,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn.clicked.connect(self._start_batch)
         self.cancel_btn.clicked.connect(self._cancel_batch)
+        self.pause_btn.clicked.connect(self._toggle_pause)
         self.retry_btn.clicked.connect(self._retry_failed)
 
         for panel in (self.settings_panel, self.presets_panel, self.filters_panel):
@@ -367,14 +376,45 @@ class MainWindow(QMainWindow):
 
         self._batch_thread = BatchThread(self._jobs, spec, self.folder_picker.folder, self.signals)
         self._batch_thread.start()
+        self._batch_paused = False
+        self.pause_btn.setText("Duraklat")
         self.start_btn.setEnabled(False)
         self.retry_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self.pause_btn.setEnabled(True)
 
     def _cancel_batch(self) -> None:
         if self._batch_thread is not None:
             self._batch_thread.cancel()
             self.statusBar().showMessage("İptal isteniyor…")
+
+    def _toggle_pause(self) -> None:
+        """Suspend / resume every running encoder. Unix-only: ffmpeg gets
+        SIGSTOP and freezes; SIGCONT unfreezes it. Windows silently no-ops
+        (no portable equivalent; would need ctypes NtSuspendProcess).
+        """
+        if self._batch_thread is None or not self._batch_thread.isRunning():
+            return
+        if not self._batch_paused:
+            paused = self._batch_thread.pause_workers()
+            if paused > 0:
+                self._batch_paused = True
+                self.pause_btn.setText("Devam Et")
+                self.statusBar().showMessage(
+                    f"Duraklatıldı ({paused} encoder askıda).",
+                )
+            else:
+                QMessageBox.information(
+                    self, "Duraklat",
+                    "Bu platformda duraklatma desteklenmiyor (Windows: ileride NtSuspendProcess ile).",
+                )
+        else:
+            resumed = self._batch_thread.resume_workers()
+            self._batch_paused = False
+            self.pause_btn.setText("Duraklat")
+            self.statusBar().showMessage(
+                f"Devam edildi ({resumed} encoder yeniden çalışıyor).",
+            )
 
     # -----------------------------------------------------------------
     # Signal handlers
@@ -448,6 +488,9 @@ class MainWindow(QMainWindow):
     def _on_batch_finished(self, completed: int, failed: int, skipped: int) -> None:
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("Duraklat")
+        self._batch_paused = False
         self.retry_btn.setEnabled(failed > 0)
         msg = f"{completed} tamam · {failed} hata · {skipped} atlandı"
         self.statusBar().showMessage(msg)
@@ -859,6 +902,56 @@ class MainWindow(QMainWindow):
         # Make the detail box wider/taller
         dlg.setStyleSheet("QTextEdit { min-width: 900px; min-height: 480px; }")
         dlg.exec()
+
+    def _setup_tray_icon(self) -> None:
+        """Add a system tray icon with show/hide + quit. When supported,
+        clicking the tray icon toggles main window visibility — letting the
+        user minimise long batches out of the way without quitting.
+        """
+        self._tray: QSystemTrayIcon | None = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        # Use Qt's built-in MediaPlay icon as a generic "video tool" glyph;
+        # avoids bundling a custom .png file for now.
+        icon: QIcon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_MediaPlay,
+        )
+        tray = QSystemTrayIcon(icon, self)
+        tray.setToolTip("Video Extender")
+        menu = QMenu(self)
+        show_action = QAction("Göster / Gizle", self)
+        show_action.triggered.connect(self._toggle_window_visibility)
+        quit_action = QAction("Çık", self)
+        quit_action.triggered.connect(self._quit_from_tray)
+        menu.addAction(show_action)
+        menu.addSeparator()
+        menu.addAction(quit_action)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        self._tray = tray
+
+    def _toggle_window_visibility(self) -> None:
+        if self.isVisible():
+            self.hide()
+        else:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        # Single click on the tray icon toggles window visibility (Trigger
+        # on X11/Windows, DoubleClick on macOS).
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._toggle_window_visibility()
+
+    def _quit_from_tray(self) -> None:
+        if self._tray is not None:
+            self._tray.hide()
+        QGuiApplication.quit()
 
     def _wire_shortcuts(self) -> None:
         """Power-user keyboard bindings.
