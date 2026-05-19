@@ -38,6 +38,9 @@ class MainWindow(QMainWindow):
         self._jobs: list[Job] = []
         self._probe_thread: ProbeThread | None = None
         self._batch_thread: BatchThread | None = None
+        # `True` once the user has explicitly clicked a preset choice — after
+        # that we never override their selection via auto-detection.
+        self._user_preset_chosen = False
 
         central = QWidget(self)
         root_layout = QVBoxLayout(central)
@@ -113,6 +116,9 @@ class MainWindow(QMainWindow):
             panel.changed.connect(self._refresh_summary)
         self.profiles_panel.profile_loaded.connect(lambda _s: self._refresh_summary())
         self.profiles_panel.reset_requested.connect(self._reset_to_defaults)
+        # `activated` fires only when the user picks an item, not when we
+        # set the combo programmatically — perfect signal for "user override".
+        self.presets_panel.combo.activated.connect(self._on_preset_user_picked)
 
         self.signals.job_added.connect(self._on_job_added)
         self.signals.job_updated.connect(self._on_job_updated)
@@ -229,7 +235,46 @@ class MainWindow(QMainWindow):
         self._jobs = t.jobs
         self.start_btn.setEnabled(bool(self._jobs))
         self.statusBar().showMessage(f"{len(self._jobs)} video hazır.")
+        self._auto_pick_preset()
         self._refresh_summary()
+
+    def _on_preset_user_picked(self, _index: int) -> None:
+        """User explicitly chose a preset — disable auto-detection from here on."""
+        self._user_preset_chosen = True
+
+    def _auto_pick_preset(self) -> None:
+        """Set the preset combo to a sensible default based on the first job's
+        aspect ratio. No-op when:
+          - user already picked manually in this session,
+          - no jobs probed yet,
+          - first job's media info isn't readable,
+          - the aspect doesn't map to a known preset.
+        """
+        if self._user_preset_chosen or not self._jobs:
+            return
+        media = self._jobs[0].media
+        if media is None or media.video is None or media.video.height == 0:
+            return
+        aspect = media.video.width / media.video.height
+        # Tolerance bands around common social-media aspects.
+        if 0.50 <= aspect <= 0.63:           # 9:16 vertical
+            preset_key = "tiktok"
+        elif 0.75 <= aspect <= 0.85:         # 4:5 portrait
+            preset_key = "ig_feed"
+        elif 0.95 <= aspect <= 1.05:         # 1:1 square
+            preset_key = "ig_feed"
+        elif 1.30 <= aspect <= 1.40:         # 4:3
+            preset_key = "yt_long"
+        elif 1.70 <= aspect <= 1.85:         # 16:9 widescreen
+            preset_key = "yt_long"
+        else:
+            return  # exotic aspect → don't second-guess the user
+        idx = self.presets_panel.combo.findData(preset_key)
+        if idx >= 0 and self.presets_panel.combo.currentIndex() != idx:
+            self.presets_panel.combo.setCurrentIndex(idx)
+            self.statusBar().showMessage(
+                f"Preset otomatik: {preset_key} (kaynak {media.video.width}×{media.video.height})"
+            )
 
     # -----------------------------------------------------------------
     # Batch run
@@ -567,6 +612,7 @@ class MainWindow(QMainWindow):
             sp.method_combo.setCurrentIndex(freeze_idx)
         sp.quality_combo.setCurrentText("medium")
         sp.codec_combo.setCurrentIndex(0)  # h264
+        sp.compress_cb.setChecked(False)
         sp.encoder_combo.setCurrentIndex(0)  # auto
         sp.parallel_slider.setValue(0)  # auto
         sp.fade_spin.setValue(1.5)
@@ -610,8 +656,9 @@ class MainWindow(QMainWindow):
         )
         self.folder_picker.recursive_cb.setChecked(False)
 
-        # 6) Reset window geometry to defaults.
+        # 6) Reset window geometry + auto-preset memory to defaults.
         self.resize(1100, 720)
+        self._user_preset_chosen = False
 
         self._refresh_summary()
         self.statusBar().showMessage("Ayarlar varsayılana döndürüldü.")

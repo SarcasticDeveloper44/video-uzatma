@@ -110,6 +110,20 @@ class SettingsPanel(QFrame):
         self.codec_combo.addItem("HEVC (~%30 daha küçük; bazı reklam platformlarında reddedilebilir)", "hevc")
         form.addRow("Codec:", self.codec_combo)
 
+        # One-click "Sıkıştır": HEVC + quality=low + tight CRF → typically
+        # ~50% of the default size at acceptable visual quality. Overrides
+        # the codec/quality combos when checked.
+        from PySide6.QtWidgets import QCheckBox
+        self.compress_cb = QCheckBox(
+            "Sıkıştır (daha küçük dosya — HEVC + düşük bitrate)"
+        )
+        self.compress_cb.setToolTip(
+            "İşaretliyken codec HEVC ve kalite 'low' olarak uygulanır; "
+            "tipik olarak çıktı boyutu ~50% daha küçük olur. "
+            "Bazı reklam platformları (Meta) HEVC'yi reddedebilir — yüklemeden önce test et."
+        )
+        form.addRow(self.compress_cb)
+
         # Encoder override
         self.encoder_combo = QComboBox()
         self.encoder_combo.addItem("Otomatik (sistemin en hızlısı)", None)
@@ -146,7 +160,7 @@ class SettingsPanel(QFrame):
         for w in (self.duration_input, self.unit_combo, self.method_combo,
                   self.quality_combo, self.codec_combo, self.encoder_combo,
                   self.fade_spin, self.filename_template,
-                  self.add_radio, self.fill_radio):
+                  self.add_radio, self.fill_radio, self.compress_cb):
             # Heterogeneous widgets — each exposes only a subset of these signals.
             with suppress(AttributeError):
                 w.valueChanged.connect(self._emit_changed)  # type: ignore[union-attr]
@@ -250,10 +264,16 @@ class SettingsPanel(QFrame):
 
     @property
     def quality(self) -> str:
+        # Compress toggle pins quality to "low" for smallest file.
+        if self.compress_cb.isChecked():
+            return "low"
         return self.quality_combo.currentText()
 
     @property
     def video_codec(self) -> str:
+        # Compress toggle forces HEVC (~30% smaller than H.264).
+        if self.compress_cb.isChecked():
+            return "hevc"
         return str(self.codec_combo.currentData() or "h264")
 
     @property

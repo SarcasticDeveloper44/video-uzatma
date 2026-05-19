@@ -79,6 +79,24 @@ class TestSettingsPanel:
         sp.parallel_slider.setValue(4)
         assert sp.max_parallel == 4
 
+    def test_compress_toggle_overrides_codec_and_quality(self, qapp) -> None:
+        """Compress checkbox pins codec=hevc and quality=low regardless of
+        what the underlying combos say."""
+        sp = SettingsPanel()
+        sp.quality_combo.setCurrentText("high")
+        sp.codec_combo.setCurrentIndex(0)  # h264
+        # Without compress: returns what combos say
+        assert sp.video_codec == "h264"
+        assert sp.quality == "high"
+        # With compress: overrides both
+        sp.compress_cb.setChecked(True)
+        assert sp.video_codec == "hevc"
+        assert sp.quality == "low"
+        # Unchecking restores the underlying choice
+        sp.compress_cb.setChecked(False)
+        assert sp.video_codec == "h264"
+        assert sp.quality == "high"
+
     def test_extender_options_built(self, qapp) -> None:
         sp = SettingsPanel()
         sp.outro_path.setText("/x/outro.mp4")
@@ -383,6 +401,54 @@ class TestSettingsPersistence:
         assert w2.settings_panel.video_codec == "hevc"
         assert w2.presets_panel.preset_key == "ig_reels"
         w2.close()
+
+
+class TestAutoPreset:
+    def test_vertical_video_picks_tiktok(self, qapp, vertical_3s, monkeypatch) -> None:
+        """A 720x1280 vertical clip should auto-pick the TikTok preset."""
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+        from video_extender.gui.main_window import MainWindow
+
+        w = MainWindow()
+        # Force preset to something non-TikTok to verify auto-pick changes it
+        idx = w.presets_panel.combo.findData("yt_long")
+        w.presets_panel.combo.setCurrentIndex(idx)
+        # Stage a vertical job
+        media = probe_file(vertical_3s)
+        w._jobs = [Job(source=vertical_3s, media=media, status=JobStatus.PENDING)]
+        w._auto_pick_preset()
+        assert w.presets_panel.preset_key == "tiktok"
+        w.close()
+
+    def test_user_choice_sticks(self, qapp, vertical_3s, monkeypatch) -> None:
+        """Once user clicks the preset combo, auto-pick must not override."""
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.core.job import Job, JobStatus
+        from video_extender.core.probe import probe_file
+        from video_extender.gui.main_window import MainWindow
+
+        w = MainWindow()
+        # Simulate user picking yt_long manually
+        w._on_preset_user_picked(0)
+        idx = w.presets_panel.combo.findData("yt_long")
+        w.presets_panel.combo.setCurrentIndex(idx)
+        # Then a vertical job lands
+        media = probe_file(vertical_3s)
+        w._jobs = [Job(source=vertical_3s, media=media, status=JobStatus.PENDING)]
+        w._auto_pick_preset()
+        # User choice respected — still yt_long
+        assert w.presets_panel.preset_key == "yt_long"
+        w.close()
 
 
 class TestResetToDefaults:
