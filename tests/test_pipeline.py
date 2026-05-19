@@ -358,6 +358,37 @@ class TestRealWorldStress:
         assert logs[0].stat().st_size > 0
 
 
+class TestMetaMode:
+    def test_meta_mode_forces_h264_via_compliance_rewrite(self, vertical_3s, tmp_path) -> None:
+        """Even when spec asks for HEVC, Meta Mode rewrites video_codec to h264."""
+        from video_extender.core.pipeline import _enforce_meta_mode_codec
+        spec = _spec(video_codec="hevc")
+        # Without meta_mode, spec passes through unchanged
+        assert _enforce_meta_mode_codec(spec).video_codec == "hevc"
+        # With meta_mode, codec gets pinned to h264
+        from dataclasses import replace
+        meta_spec = replace(spec, meta_mode=True)
+        assert _enforce_meta_mode_codec(meta_spec).video_codec == "h264"
+
+    def test_meta_mode_injects_required_filters(self, vertical_3s, tmp_path) -> None:
+        """Meta Mode ensures audio_normalize + metadata_strip are in the chain
+        even if the user didn't toggle them."""
+        from video_extender.core.pipeline import _resolve_filters
+        spec = _spec(filters=(), meta_mode=True)
+        chain = _resolve_filters(spec, target_duration=10.0, main_width=1080)
+        # Chain is a list of (Filter, options) pairs
+        names = [f.name for f, _ in chain.filters]
+        assert "audio_normalize" in names
+        assert "metadata_strip" in names
+
+    def test_meta_mode_audio_normalize_target_minus_14_lufs(self, tmp_path) -> None:
+        from video_extender.core.pipeline import _resolve_filters
+        spec = _spec(filters=(), meta_mode=True)
+        chain = _resolve_filters(spec, target_duration=10.0, main_width=1080)
+        norm_opts = next(opts for f, opts in chain.filters if f.name == "audio_normalize")
+        assert norm_opts.get("target_lufs") == -14.0
+
+
 class TestFfmpegEncodeFailure:
     """Probe succeeds but the ffmpeg encode itself fails. Verify the failure is
     detected, surfaced as FAILED with an actionable error, and the per-job log

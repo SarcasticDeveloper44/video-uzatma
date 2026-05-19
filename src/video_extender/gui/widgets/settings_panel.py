@@ -124,6 +124,25 @@ class SettingsPanel(QFrame):
         )
         form.addRow(self.compress_cb)
 
+        # Meta Ads compliance mode: forces H.264 + AAC + -14 LUFS +
+        # metadata-strip + BT.709 colorspace tags. Pre-encode source warnings
+        # surface in the status bar; post-encode spec violations land in the
+        # job's error field. Overrides codec/compress when both are set.
+        self.meta_mode_cb = QCheckBox(
+            "Meta Reklam Modu (FB/IG için teknik uyumluluk)"
+        )
+        self.meta_mode_cb.setToolTip(
+            "İşaretliyken çıktı Meta'nın teknik gereksinimlerine zorla uydurulur:\n"
+            "  • H.264 codec (HEVC iptal)\n"
+            "  • Ses -14 LUFS'a normalize\n"
+            "  • Metadata temizliği\n"
+            "  • BT.709 renk uzayı tag\n"
+            "  • yuv420p + faststart\n"
+            "Yüklemeden sonra Meta'nın içerik (content policy) red sebepleri ayrı "
+            "konudur — bu sadece teknik red'leri önler."
+        )
+        form.addRow(self.meta_mode_cb)
+
         # Encoder override
         self.encoder_combo = QComboBox()
         self.encoder_combo.addItem("Otomatik (sistemin en hızlısı)", None)
@@ -160,7 +179,8 @@ class SettingsPanel(QFrame):
         for w in (self.duration_input, self.unit_combo, self.method_combo,
                   self.quality_combo, self.codec_combo, self.encoder_combo,
                   self.fade_spin, self.filename_template,
-                  self.add_radio, self.fill_radio, self.compress_cb):
+                  self.add_radio, self.fill_radio, self.compress_cb,
+                  self.meta_mode_cb):
             # Heterogeneous widgets — each exposes only a subset of these signals.
             with suppress(AttributeError):
                 w.valueChanged.connect(self._emit_changed)  # type: ignore[union-attr]
@@ -271,10 +291,17 @@ class SettingsPanel(QFrame):
 
     @property
     def video_codec(self) -> str:
+        # Meta Mode pins H.264 (overrides compress + manual codec selection).
+        if self.meta_mode_cb.isChecked():
+            return "h264"
         # Compress toggle forces HEVC (~30% smaller than H.264).
         if self.compress_cb.isChecked():
             return "hevc"
         return str(self.codec_combo.currentData() or "h264")
+
+    @property
+    def meta_mode(self) -> bool:
+        return self.meta_mode_cb.isChecked()
 
     @property
     def encoder_override(self) -> str | None:

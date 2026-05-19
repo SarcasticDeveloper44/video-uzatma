@@ -12,6 +12,7 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
+from video_extender.core import compliance as _compliance
 from video_extender.core import config as _config
 from video_extender.core import errors as _errors
 from video_extender.core import fast_path as _fast_path
@@ -55,14 +56,30 @@ def _resolve_filters(spec: JobSpec, target_duration: float, main_width: int) -> 
     """Resolve filter chain, injecting per-job runtime context (target_duration,
     main_width) into filter options that need it but were left as 0/missing by
     the caller.
+
+    When `spec.meta_mode` is True, audio_normalize (target -14 LUFS) and
+    metadata_strip are force-added to the chain if absent — guarantees
+    Meta's audio loudness target and clean metadata regardless of which
+    filters the user toggled in the UI.
     """
     chain = FilterChain()
-    for fname in spec.filters:
+    user_filters = list(spec.filters)
+    user_filter_options = dict(spec.filter_options)
+    if spec.meta_mode:
+        # Inject Meta-required filters at the front if not already requested.
+        for forced in ("audio_normalize", "metadata_strip"):
+            if forced not in user_filters:
+                user_filters.append(forced)
+        # Ensure audio_normalize target matches Meta's recommended LUFS.
+        existing = dict(user_filter_options.get("audio_normalize", {}))
+        existing["target_lufs"] = _compliance.META_SPEC.target_lufs
+        user_filter_options["audio_normalize"] = existing
+    for fname in user_filters:
         cls = FILTER_REGISTRY.get(fname)
         if cls is None:
             log.warning("unknown filter '%s' — skipping", fname)
             continue
-        opts = dict(spec.filter_options.get(fname, {}))
+        opts = dict(user_filter_options.get(fname, {}))
         if fname == "audio_fade_out" and not opts.get("total_duration"):
             opts["total_duration"] = target_duration
         if fname == "watermark" and not opts.get("_main_width") and main_width > 0:
@@ -93,6 +110,17 @@ def _resolve_encoder_for_slot(slot: WorkerSlot, hw: HardwareInfo) -> EncoderBack
         if cls.ffmpeg_encoder == slot.encoder:
             return cls()
     raise RuntimeError(f"No EncoderBackend registered for ffmpeg encoder '{slot.encoder}'")
+
+
+def _enforce_meta_mode_codec(spec: JobSpec) -> JobSpec:
+    """Meta accepts H.264 only. If a Meta-Mode job came in with hevc/av1/vp9
+    (via the compress toggle or codec combo), silently rewrite to h264 so
+    the scheduler picks an H.264 encoder.
+    """
+    if spec.meta_mode and spec.video_codec != "h264":
+        from dataclasses import replace
+        return replace(spec, video_codec="h264")
+    return spec
 
 
 def _compute_target_duration(spec: JobSpec, source_duration: float) -> float:
@@ -247,6 +275,16 @@ def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltComm
     argv += list(enc_args.audio_args)
     argv += list(enc_args.container_args)
     argv += extra_output_args
+    # Meta Mode: stamp BT.709 colorspace metadata so the output declares the
+    # color primaries / transfer / matrix that Meta's ingest expects. Doesn't
+    # change pixel data; only writes the right tags into the H.264 SEI / MP4
+    # boxes. Harmless on non-Meta uploads too.
+    if spec.meta_mode:
+        argv += [
+            "-colorspace", "bt709",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+        ]
     argv += ["-t", f"{target:.3f}"]
     argv += [str(job.output)]
 
@@ -333,6 +371,28 @@ def _apply_ffmpeg_result(
             if state_file is not None:
                 _config.mark_failed(state_file, job.source, job.error)
             return
+        # Meta Mode: re-probe output and surface any Meta-spec violations as
+        # warnings appended to job.error (job still counts as completed —
+        # the file is technically usable, just may get rejected on upload).
+        if job.spec is not None and job.spec.meta_mode and job.output is not None:
+            meta_report = _compliance.check_output(job.output)
+            if not meta_report.ok or meta_report.has_warnings:
+                fails = [i.message for i in meta_report.issues if i.severity == "fail"]
+                warns = [i.message for i in meta_report.issues if i.severity == "warning"]
+                parts: list[str] = []
+                if fails:
+                    parts.append("META HATA: " + " | ".join(fails))
+                if warns:
+                    parts.append("META UYARI: " + " | ".join(warns))
+                # Hard fails downgrade the job to FAILED so the user sees them.
+                if fails:
+                    job.status = JobStatus.FAILED
+                    job.error = " · ".join(parts)
+                    if state_file is not None:
+                        _config.mark_failed(state_file, job.source, job.error)
+                    return
+                # Warnings only — note them but still count completed.
+                job.error = " · ".join(parts)
         job.status = JobStatus.COMPLETED
         job.progress = 1.0
         if state_file is not None and job.output is not None:
@@ -503,6 +563,11 @@ class BatchRunner:
                 r.cancel()
 
     def run(self) -> list[Job]:
+        # Meta Mode hard-overrides codec to H.264 (some HEVC paths trigger
+        # ad rejection); rewrite spec before scheduling so the right encoder
+        # is picked.
+        self.spec = _enforce_meta_mode_codec(self.spec)
+
         out_dir = ensure_output_dir(self.source_folder, self.spec.output_subdir)
         state_path = out_dir / ".video_extender_state.json"
         log_dir = out_dir / "logs"

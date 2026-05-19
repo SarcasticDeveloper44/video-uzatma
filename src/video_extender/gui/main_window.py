@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
             video_codec=self.settings_panel.video_codec,
             encoder_override=self.settings_panel.encoder_override,
             max_parallel=self.settings_panel.max_parallel,
+            meta_mode=self.settings_panel.meta_mode,
             filters=tuple(filters),
             filter_options=opts,
             extender_options=self.settings_panel.extender_options(),
@@ -236,7 +237,35 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(bool(self._jobs))
         self.statusBar().showMessage(f"{len(self._jobs)} video hazır.")
         self._auto_pick_preset()
+        self._maybe_show_meta_warnings()
         self._refresh_summary()
+
+    def _maybe_show_meta_warnings(self) -> None:
+        """When Meta Mode is on, scan probed sources for issues that would
+        survive into the output and surface them as a single status dialog.
+        Skipped when Meta Mode is off or no jobs probed."""
+        if not self.settings_panel.meta_mode or not self._jobs:
+            return
+        from video_extender.core import compliance as _compliance
+        problem_lines: list[str] = []
+        for j in self._jobs:
+            if j.media is None:
+                continue
+            report = _compliance.check_source(j.media)
+            if report.issues:
+                bullets = "\n  ".join(i.message for i in report.issues)
+                problem_lines.append(f"• {j.name}:\n  {bullets}")
+        if not problem_lines:
+            self.statusBar().showMessage(
+                "Meta uyumluluk: tüm kaynaklar OK ✓", 5000,
+            )
+            return
+        msg = (
+            "Meta Reklam Modu açık. Bazı kaynaklarda dikkat edilmesi gereken "
+            "noktalar var (encoder yine çalışacak, ama Meta'ya yüklerken "
+            "sorun çıkabilir):\n\n" + "\n\n".join(problem_lines)
+        )
+        QMessageBox.information(self, "Meta uyumluluk öncesi", msg)
 
     def _on_preset_user_picked(self, _index: int) -> None:
         """User explicitly chose a preset — disable auto-detection from here on."""
@@ -613,6 +642,7 @@ class MainWindow(QMainWindow):
         sp.quality_combo.setCurrentText("medium")
         sp.codec_combo.setCurrentIndex(0)  # h264
         sp.compress_cb.setChecked(False)
+        sp.meta_mode_cb.setChecked(False)
         sp.encoder_combo.setCurrentIndex(0)  # auto
         sp.parallel_slider.setValue(0)  # auto
         sp.fade_spin.setValue(1.5)

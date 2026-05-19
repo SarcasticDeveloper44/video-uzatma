@@ -46,6 +46,12 @@ class JobSpec:
     # source duration; explicit values forward to the encoder verbatim
     # (libx264: ultrafast..veryslow; nvenc: p1..p7).
     encoder_preset: str = "auto"
+    # Meta Ads strict mode: forces H.264 + AAC + audio_normalize at -14 LUFS
+    # + metadata_strip + BT.709 color metadata + faststart, regardless of
+    # other settings. Post-encode validation runs against Meta's published
+    # technical spec; failures land in job.error so they show up in the GUI
+    # row tooltip + ffmpeg.log.
+    meta_mode: bool = False
     filters: tuple[str, ...] = ()      # filter chain names, in order
     filter_options: dict[str, Any] = field(default_factory=dict)
     extender_options: dict[str, Any] = field(default_factory=dict)
