@@ -71,18 +71,22 @@ def _ensure_build_venv() -> Path:
 
     print(f">> Creating build venv at {BUILD_VENV}")
     subprocess.check_call([python, "-m", "venv", str(BUILD_VENV)])
+    # `pip install --upgrade pip` via pip.exe fails on Windows because pip
+    # cannot rewrite its own .exe while it's running. Use `python -m pip`
+    # so the upgrade happens in a separate process.
+    venv_py = str(_venv_python())
     subprocess.check_call(
-        [str(_venv_pip()), "install", "--upgrade", "pip", "--quiet"]
+        [venv_py, "-m", "pip", "install", "--upgrade", "pip", "--quiet"]
     )
     print(">> Installing PyInstaller + PySide6 + project")
     subprocess.check_call([
-        str(_venv_pip()), "install", "--quiet",
+        venv_py, "-m", "pip", "install", "--quiet",
         "pyinstaller>=6.0",
         "PySide6>=6.6.0",
     ])
     # Install our project so PyInstaller can `import video_extender`.
     subprocess.check_call([
-        str(_venv_pip()), "install", "--quiet", "-e", str(ROOT),
+        venv_py, "-m", "pip", "install", "--quiet", "-e", str(ROOT),
     ])
     return _venv_python()
 

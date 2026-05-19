@@ -199,13 +199,16 @@ def _ensure_venv() -> Path:
                     shutil.rmtree(venv, ignore_errors=True)
                 venv.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.check_call([python, "-m", "venv", str(venv)])
+                # Use `python -m pip` (not pip.exe) so pip can self-upgrade on
+                # Windows; pip.exe cannot rewrite itself while running.
+                venv_py = str(_venv_python_at(venv))
                 subprocess.check_call(
-                    [str(_venv_pip_at(venv)), "install", "--upgrade", "pip", "--quiet"]
+                    [venv_py, "-m", "pip", "install", "--upgrade", "pip", "--quiet"]
                 )
                 if REQ.exists():
                     print(">> Installing requirements")
                     subprocess.check_call(
-                        [str(_venv_pip_at(venv)), "install", "-r", str(REQ), "--quiet"]
+                        [venv_py, "-m", "pip", "install", "-r", str(REQ), "--quiet"]
                     )
                 # Remember which location worked so next launches skip the racy path.
                 try:
