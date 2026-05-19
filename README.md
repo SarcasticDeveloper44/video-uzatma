@@ -2,20 +2,46 @@
 
 Facebook / Instagram / TikTok / YouTube / X / LinkedIn reklam videolarını toplu olarak **uzatıp sıkıştıran** GUI + CLI aracı. Tek videoyu da, yüzlerce videoyu da seçilen klasörden topluca işler; GPU + CPU encoder'larını paralel kullanır. Linux / macOS / Windows; NVIDIA / Intel / AMD / Apple Silicon — hepsi destekli.
 
-## Hızlı Başlangıç
+## Hızlı Başlangıç (Son Kullanıcı — Tak Çalıştır)
 
-| Platform | Çift-tıkla (GUI) | Terminal'den |
-|----------|-----------------|--------------|
-| Linux | — | `./run.sh` |
-| macOS | `run.command` (Finder'dan) | `./run.sh` |
-| Windows 10/11 | `run.bat` (Explorer'dan) | `run.bat` veya `python run.py` |
-| Hepsi | — | `python run.py` |
+İşletim sistemine uygun **tek dosyayı** [Releases sayfasından](../../releases/latest) indir, çift tıkla — açılır. Python, pip, venv, ffmpeg — hiçbir şey gerekmez. Her şey gömülü.
 
-İlk çalıştırma `.venv/` oluşturur ve PySide6'yı yükler. **ffmpeg + ffprobe** sistemde olmalı:
+| Platform | İndirilecek | Nasıl çalıştırılır |
+|----------|-------------|---------------------|
+| Windows 10/11 (64-bit) | `video-extender-windows-amd64.exe` | Çift tıkla |
+| macOS (Apple Silicon) | `Video-Extender-darwin-arm64.app.zip` | Zip'i aç, `.app`'i çift tıkla |
+| macOS (Intel) | `Video-Extender-darwin-x86_64.app.zip` | Zip'i aç, `.app`'i çift tıkla |
+| Linux (x86_64) | `video-extender-linux-x86_64` | `chmod +x` sonra çift tıkla veya `./video-extender-linux-x86_64` |
 
-- Linux: `pacman -S ffmpeg` · `apt install ffmpeg` · `dnf install ffmpeg`
-- macOS: `brew install ffmpeg`
-- Windows: `winget install Gyan.FFmpeg`
+İlk açılış birkaç saniye sürebilir (PyInstaller içeriği temp klasöre extract eder). Sonraki açılışlar anında.
+
+## Geliştirici / kaynaktan çalıştırma
+
+Kaynak koddan çalıştırmak istersen launcher otomatik bootstrap yapar:
+
+```bash
+# Linux / macOS
+./run.sh
+
+# Windows
+run.bat        # veya: python run.py
+```
+
+İlk çalıştırma:
+- `.venv/` oluşturulup PySide6 indirilir (sürüm uyumsuzluğunda `py.exe -3.13` / `python3.13` gibi alternatif Python otomatik bulunur)
+- OneDrive-sync'li klasörlerde venv kurulumu başarısız olursa `%LOCALAPPDATA%\video-extender\venv` (Windows) / `~/.cache/video-extender/venv` (Linux/macOS) fallback'i devreye girer
+- ffmpeg + ffprobe sistemde yoksa `.ffmpeg/` klasörüne statik binary indirilir
+  - Linux: [johnvansickle.com](https://johnvansickle.com/ffmpeg/)
+  - macOS: [evermeet.cx](https://evermeet.cx/ffmpeg/)
+  - Windows: [gyan.dev](https://www.gyan.dev/ffmpeg/)
+
+## Standalone binary üretmek (kendi platformunun için)
+
+```bash
+python build.py
+```
+
+Çıktı: `dist/video-extender-<os>-<arch>` — tek dosyalık plug-and-play executable (Python + PySide6 + ffmpeg gömülü). PyInstaller cross-compile yapmaz; her platform için o platformda build alınmalı veya `.github/workflows/release.yml`'i tetiklemek için `git tag v0.1.0 && git push --tags` yap — GitHub Actions üç platformu da paralel build eder ve Release artifact'i olarak yayınlar.
 
 ## Desteklenen donanım
 

@@ -10,10 +10,19 @@ build/
 dist/
 .pytest_cache/
 
+# PyInstaller build artifacts
+.venv-build/
+video-extender.spec
+
 # Virtualenv
 .venv/
 venv/
 env/
+
+# Auto-downloaded ffmpeg / ffprobe (run.py bootstrap)
+.ffmpeg/
+# Marker pointing at the chosen venv location (project-local or user-cache fallback)
+.venv-location
 
 # IDE
 .vscode/

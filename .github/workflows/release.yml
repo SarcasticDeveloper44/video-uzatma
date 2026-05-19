@@ -1,0 +1,92 @@
+name: Build release binaries
+
+# Builds plug-and-play standalone executables for Linux, macOS, and Windows.
+# Triggers:
+#   - on push of a tag matching v* (e.g. v0.1.0) → creates a GitHub Release
+#   - manually via the "Run workflow" button → uploads artifacts only
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: video-extender-linux-x86_64
+          - os: macos-latest
+            artifact: Video-Extender-darwin-arm64.app
+          - os: windows-latest
+            artifact: video-extender-windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install system ffmpeg deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-cursor0
+
+      - name: Build standalone binary
+        run: python build.py
+
+      - name: Locate artifact
+        id: locate
+        shell: bash
+        run: |
+          # macOS produces a directory (.app); zip it for upload.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cd dist
+            zip -r9 "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
+            echo "path=dist/${{ matrix.artifact }}.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=dist/${{ matrix.artifact }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.locate.outputs.path }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name 'video-extender-*' -o -name '*.zip' \) \
+            -exec cp {} release/ \;
+          ls -lah release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
