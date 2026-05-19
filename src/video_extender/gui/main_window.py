@@ -7,8 +7,8 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
-    QStatusBar, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
+    QSplitter, QStatusBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from video_extender.core import config as _config
@@ -81,16 +81,41 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.hardware_widget, "Donanım")
 
         self.video_list = VideoListWidget()
+        # Status filter combobox above the list so the user can isolate
+        # failures / completed / pending without scrolling huge batches.
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Göster:"))
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("Tümü", None)
+        self.status_filter.addItem("Bekleyen", JobStatus.PENDING)
+        self.status_filter.addItem("Çalışan", JobStatus.RUNNING)
+        self.status_filter.addItem("Tamamlanan", JobStatus.COMPLETED)
+        self.status_filter.addItem("Hatalı", JobStatus.FAILED)
+        self.status_filter.addItem("Atlanan", JobStatus.SKIPPED)
+        self.status_filter.addItem("İptal", JobStatus.CANCELLED)
+        self.status_filter.currentIndexChanged.connect(self._apply_status_filter)
+        filter_row.addWidget(self.status_filter)
+        filter_row.addStretch(1)
+        right_layout.addLayout(filter_row)
+        right_layout.addWidget(self.video_list, 1)
+
         splitter.addWidget(self.tabs)
-        splitter.addWidget(self.video_list)
+        splitter.addWidget(right_panel)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([380, 720])
         return splitter
 
     def _build_action_bar(self) -> QHBoxLayout:
-        """Bottom row: summary label + Retry / Cancel / Start buttons."""
+        """Bottom row: multi-line summary label + Retry / Cancel / Start buttons."""
         action_row = QHBoxLayout()
         self.summary_label = QLabel("")
+        # Pre-batch summary spans 3 lines — give it room.
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setTextFormat(Qt.TextFormat.RichText)
+        self.summary_label.setMinimumHeight(60)
         self.retry_btn = QPushButton("Başarısızları Yeniden Dene")
         self.retry_btn.setEnabled(False)
         self.start_btn = QPushButton("Başlat")
@@ -356,10 +381,26 @@ class MainWindow(QMainWindow):
     # -----------------------------------------------------------------
     def _on_job_added(self, job: Job) -> None:
         self.video_list.add_job(job)
+        self._apply_status_filter()
 
     def _on_job_updated(self, job: Job) -> None:
         self.video_list.update_job(job)
+        self._apply_status_filter()
         self._update_batch_eta()
+
+    def _apply_status_filter(self) -> None:
+        """Hide rows whose status doesn't match the filter combo. 'Tümü'
+        clears all hidden flags. Called both on combo change and after
+        every job update so rows reappear/disappear as state transitions."""
+        target = self.status_filter.currentData()
+        if target is None:
+            for row in range(self.video_list.rowCount()):
+                self.video_list.setRowHidden(row, False)
+            return
+        # Build a status lookup keyed by source for the rows currently shown.
+        status_by_source = {j.source: j.status for j in self._jobs}
+        for src, row in self.video_list._row_for_source.items():
+            self.video_list.setRowHidden(row, status_by_source.get(src) != target)
 
     def _update_batch_eta(self) -> None:
         """Aggregate per-job ETA into an overall batch ETA.
@@ -428,14 +469,96 @@ class MainWindow(QMainWindow):
     def _refresh_summary(self) -> None:
         try:
             spec = self._gather_spec()
-            size_hint = self._estimate_total_output_size(spec)
-            size_str = f" · ~{size_hint}" if size_hint else ""
-            self.summary_label.setText(
-                f"<b>{len(self._jobs)}</b> video · {self.settings_panel.summary()} · "
-                f"{spec.preset_name} · filtreler: {len(spec.filters)}{size_str}"
-            )
+            self.summary_label.setText(self._build_batch_summary_html(spec))
         except Exception:  # noqa: BLE001
             self.summary_label.setText("")
+
+    def _build_batch_summary_html(self, spec: JobSpec) -> str:
+        """Multi-line pre-batch breakdown rendered as HTML in the summary label.
+
+        Shows: video count, mode/method/quality, preset, output destination,
+        total source duration → total target duration, estimated output size,
+        filter count + Meta-Mode flag, encoder strategy preview.
+        """
+        n = len(self._jobs)
+        if n == 0:
+            return "<i>Klasör veya video sürükle / Seç düğmesine bas.</i>"
+
+        # Line 1: high-level
+        line1 = (
+            f"<b>{n}</b> video · {self.settings_panel.summary()} · "
+            f"preset: <b>{spec.preset_name}</b>"
+        )
+        if spec.meta_mode:
+            line1 += " · <span style='color:#3a8;'>Meta Modu</span>"
+        if self.settings_panel.compress_cb.isChecked() and not spec.meta_mode:
+            line1 += " · <span style='color:#888;'>Sıkıştır</span>"
+
+        # Line 2: duration + size
+        total_src_dur = sum(
+            j.media.duration for j in self._jobs if j.media is not None
+        )
+        from video_extender.core.job import ExtendMode
+        total_out_dur = sum(
+            (j.media.duration + spec.extend_seconds if spec.extend_mode == ExtendMode.ADD
+             else max(j.media.duration, spec.extend_seconds))
+            for j in self._jobs if j.media is not None
+        )
+        size_hint = self._estimate_total_output_size(spec) or "—"
+        line2 = (
+            f"<small>Süre toplam: {self._format_minutes(total_src_dur)} kaynak "
+            f"→ {self._format_minutes(total_out_dur)} çıktı · "
+            f"Boyut: <b>{size_hint}</b></small>"
+        )
+
+        # Line 3: output destination + filter + encoder strategy
+        if spec.output_dir_override:
+            out_dst = spec.output_dir_override
+        elif self.folder_picker.folder is not None:
+            out_dst = f"{self.folder_picker.folder}/{spec.output_subdir}/"
+        else:
+            out_dst = "(önce kaynak seç)"
+        encoder_hint = self._encoder_strategy_hint(spec, n)
+        line3 = (
+            f"<small>Çıktı: {out_dst} · {len(spec.filters)} filtre · {encoder_hint}</small>"
+        )
+
+        return f"{line1}<br>{line2}<br>{line3}"
+
+    @staticmethod
+    def _format_minutes(seconds: float) -> str:
+        if seconds < 60:
+            return f"{int(seconds)}sn"
+        m = seconds / 60
+        if m < 60:
+            return f"{m:.1f}dk"
+        h = m / 60
+        return f"{h:.1f}sa"
+
+    def _encoder_strategy_hint(self, spec: JobSpec, n_jobs: int) -> str:
+        """Best-effort one-line description of the scheduler's plan."""
+        try:
+            from video_extender.core.hardware import detect
+            from video_extender.core.scheduler import plan
+            sched = plan(
+                n_jobs, hw=detect(), codec=spec.video_codec,
+                encoder_override=spec.encoder_override,
+                max_parallel_override=spec.max_parallel,
+                probe_gpu=False,
+            )
+            gpu_count = len(sched.gpu_slots)
+            cpu_count = len(sched.cpu_slots)
+            parts: list[str] = []
+            if gpu_count:
+                # All GPU slots share an encoder; show the first one.
+                enc = sched.gpu_slots[0].encoder
+                parts.append(f"{gpu_count}× {enc}")
+            if cpu_count:
+                enc = sched.cpu_slots[0].encoder
+                parts.append(f"{cpu_count}× {enc}")
+            return "Worker'lar: " + (" + ".join(parts) if parts else "—")
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _estimate_total_output_size(self, spec: JobSpec) -> str:
         """Rough size estimate: bitrate × target_duration × n_jobs.
@@ -850,6 +973,7 @@ class MainWindow(QMainWindow):
         # 5) Clear current job list + folder selection.
         self._jobs = []
         self.video_list.clear_rows()
+        self.status_filter.setCurrentIndex(0)  # "Tümü"
         self.folder_picker._folder = None
         self.folder_picker.path_label.setText(
             "<i>Klasör veya video dosyalarını buraya sürükle — ya da seç düğmelerini kullan.</i>"
