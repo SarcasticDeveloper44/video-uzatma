@@ -700,6 +700,19 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         log.info("Pencere kapatma isteği alındı (closeEvent).")
+        # Tray-resident mode: hide instead of accepting close. Real quit
+        # comes from the tray menu's 'Çık' (which calls _quit_from_tray).
+        # Skip this path when a batch is running — the user should see the
+        # 'still working' confirmation dialog before the app vanishes.
+        batch_running = (
+            self._batch_thread is not None and self._batch_thread.isRunning()
+        )
+        if self._tray is not None and self._tray.isVisible() and not batch_running:
+            log.info("Tray aktif — pencere tray'e gizleniyor; "
+                     "tam çıkış için tray menüsünden Çık'ı kullan.")
+            self.hide()
+            event.ignore()
+            return
         if self._batch_thread is not None and self._batch_thread.isRunning():
             running = sum(1 for j in self._jobs if j.status == JobStatus.RUNNING)
             pending = sum(1 for j in self._jobs if j.status in (
@@ -904,15 +917,28 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _setup_tray_icon(self) -> None:
-        """Add a system tray icon with show/hide + quit. When supported,
-        clicking the tray icon toggles main window visibility — letting the
-        user minimise long batches out of the way without quitting.
+        """Add a system tray icon with show/hide + quit. When the tray is
+        available we switch the app to *tray-resident* mode: closing the
+        main window hides it (rather than quitting), and Qt's default
+        "quit when last window closes" is disabled so a hidden window
+        doesn't tear the whole app down. The only real quit path becomes
+        tray menu → 'Çık'.
+
+        This also defends against an obscure failure mode reported in
+        the wild: on some compositors the WM briefly hid/closed the main
+        window during startup. With quitOnLastWindowClosed = True (Qt's
+        default) the app would silently exit — looking like "GUI kendi
+        kendine kapanıyor". With this fix the worst case is the window
+        going to tray; the app survives until the user explicitly quits.
         """
         self._tray: QSystemTrayIcon | None = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
+            log.info("System tray bulunamadı; tray-mode kapalı.")
             return
-        # Use Qt's built-in MediaPlay icon as a generic "video tool" glyph;
-        # avoids bundling a custom .png file for now.
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.setQuitOnLastWindowClosed(False)
         icon: QIcon = self.style().standardIcon(
             QStyle.StandardPixmap.SP_MediaPlay,
         )
@@ -930,6 +956,8 @@ class MainWindow(QMainWindow):
         tray.activated.connect(self._on_tray_activated)
         tray.show()
         self._tray = tray
+        log.info("Tray-mode aktif: X butonu pencereyi tray'e gizler, "
+                 "tam çıkış sadece tray menüsünden.")
 
     def _toggle_window_visibility(self) -> None:
         if self.isVisible():
@@ -949,9 +977,20 @@ class MainWindow(QMainWindow):
             self._toggle_window_visibility()
 
     def _quit_from_tray(self) -> None:
+        """Tray menu → Çık. Real exit, bypasses the close-to-tray check."""
+        log.info("Tray'den Çık seçildi — uygulama kapatılıyor.")
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            self._batch_thread.cancel()
+            self._batch_thread.wait(3000)
+        self._save_settings()
         if self._tray is not None:
             self._tray.hide()
-        QGuiApplication.quit()
+            self._tray = None  # ensures closeEvent won't try to hide-to-tray
+        # Close all windows and quit the QApplication event loop.
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _wire_shortcuts(self) -> None:
         """Power-user keyboard bindings.
