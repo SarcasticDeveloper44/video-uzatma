@@ -252,12 +252,14 @@ PENDING  ──┬─→ PROBING ─→ QUEUED ─→ RUNNING ─┬─→ COMPL
 `pytest.ini` markers:
 - (varsayılan) hızlı birim testler
 - `@pytest.mark.integration` — gerçek ffmpeg çağırır
+- `@pytest.mark.slow` — uzun süren scale/stress testleri (`-m "not slow"` ile atlanır)
 - `@pytest.mark.gpu` — NVENC sahibi sistem gerektirir
 - `@pytest.mark.gui` — PySide6 yüklü olmalı
 
-`tests/conftest.py` her test için:
+`tests/conftest.py` her test için (autouse):
 - QSettings'i tmp dizine yönlendirir (kullanıcı ayarlarına dokunmaz)
 - QMessageBox modal'larını no-op stub'lar (offscreen Qt hang olmaz)
+- `notify()` masaüstüne dispatch'i devre dışı (test'lerden gerçek bildirim sızmasın)
 - `QT_QPA_PLATFORM=offscreen` set eder
 
 Real video fixture'ları `ffmpeg lavfi` ile üretilir — placeholder/demo data değil, gerçek H.264 encoded dosya.
@@ -265,12 +267,13 @@ Real video fixture'ları `ffmpeg lavfi` ile üretilir — placeholder/demo data 
 ## Test stat
 
 ```
-~197 test (193 fast + 4 slow)
+205 test (201 fast + 4 slow)
 - tests/test_*.py birim testleri (filter, encoder, preset, hardware, scheduler)
 - tests/test_pipeline.py @pytest.mark.integration uçtan uca ffmpeg
 - tests/test_stress.py @pytest.mark.slow 1080p 30s yük testleri
 - tests/test_gui.py @pytest.mark.gui PySide6 widget'ları
 - tests/test_cli.py argparse + main()
+- tests/test_notify.py subprocess-mock'lu notify davranışı
 ```
 
 ## Modül bağımlılık zinciri
