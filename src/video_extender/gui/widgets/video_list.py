@@ -3,15 +3,39 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import (
+    QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, Signal, Slot,
+)
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QMenu, QProgressBar, QTableWidget,
     QTableWidgetItem, QWidget,
 )
 
 from video_extender.core.job import Job, JobStatus
+from video_extender.utils import thumbnail as _thumbnail
 from video_extender.utils.duration import format_duration
+
+
+class _ThumbnailSignaller(QObject):
+    """QRunnable can't carry signals directly — wrap them in a QObject."""
+    ready = Signal(object, str)  # (source: Path, png_path: str | empty)
+
+
+class _ThumbnailLoader(QRunnable):
+    """Background task: extract a thumbnail for one source path. Emits the
+    `ready` signal on completion so the pixmap is installed on the GUI
+    thread (Qt's signal/slot machinery handles the marshalling)."""
+
+    def __init__(self, source: Path) -> None:
+        super().__init__()
+        self.source = source
+        self.signals = _ThumbnailSignaller()
+
+    @Slot()
+    def run(self) -> None:
+        png = _thumbnail.extract(self.source)
+        self.signals.ready.emit(self.source, str(png) if png else "")
 
 
 def _format_eta(seconds: float) -> str:
@@ -74,6 +98,13 @@ class VideoListWidget(QTableWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(0, len(self.COLS), parent)
         self.setHorizontalHeaderLabels(self.COLS)
+        # Bigger row height so the embedded thumbnail icon has room to render.
+        self.verticalHeader().setDefaultSectionSize(56)
+        self.setIconSize(QSize(_thumbnail.THUMBNAIL_WIDTH, _thumbnail.THUMBNAIL_HEIGHT))
+        # Dedicated thread pool keeps thumbnail extraction off the main thread;
+        # 2 workers is plenty (ffmpeg is the bottleneck, not parallelism).
+        self._thumb_pool = QThreadPool(self)
+        self._thumb_pool.setMaxThreadCount(2)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         # Multi-select via Ctrl-click / Shift-click for bulk operations.
@@ -107,6 +138,23 @@ class VideoListWidget(QTableWidget):
             if tooltip:
                 new_map[Path(tooltip)] = row
         self._row_for_source = new_map
+
+    @Slot(object, str)
+    def _on_thumbnail_ready(self, source: object, png_path: str) -> None:
+        """Background thumbnail extraction finished — install the icon on
+        the matching row (if it's still present in the table)."""
+        if not png_path or not isinstance(source, Path):
+            return
+        row = self._row_for_source.get(source)
+        if row is None:
+            return
+        item = self.item(row, 0)
+        if item is None:
+            return
+        pixmap = QPixmap(png_path)
+        if pixmap.isNull():
+            return
+        item.setIcon(QIcon(pixmap))
 
     def _selected_sources(self) -> list[Path]:
         """Return the source paths of every currently selected row."""
@@ -208,6 +256,11 @@ class VideoListWidget(QTableWidget):
         name_item = QTableWidgetItem(job.source.name)
         name_item.setToolTip(str(job.source))
         self.setItem(row, 0, name_item)
+        # Kick off async thumbnail extraction. The result lands in
+        # _on_thumbnail_ready which installs the icon on the correct row.
+        loader = _ThumbnailLoader(job.source)
+        loader.signals.ready.connect(self._on_thumbnail_ready)
+        self._thumb_pool.start(loader)
 
         dur = format_duration(job.media.duration) if job.media else "—"
         self.setItem(row, 1, QTableWidgetItem(dur))
