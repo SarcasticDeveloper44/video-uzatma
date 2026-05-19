@@ -6,6 +6,7 @@ from typing import Any
 import sys
 from pathlib import Path
 
+from video_extender import __version__
 from video_extender.core import preflight as _preflight
 from video_extender.core.extenders import EXTENDER_REGISTRY
 from video_extender.core.job import ExtendMode, Job, JobSpec, JobStatus
@@ -32,6 +33,10 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="video-extender",
         description="Sosyal medya reklam videolarını toplu uzat ve sıkıştır.",
     )
+    p.add_argument("--version", action="version",
+                   version=f"video-extender {__version__}")
+    p.add_argument("--doctor", action="store_true",
+                   help="Sistem sağlık raporu: ffmpeg, donanım, encoder'lar, disk. Çıkış.")
     p.add_argument("--folder", "-f", type=Path, required=False,
                    help="İşlenecek videoların bulunduğu klasör.")
     p.add_argument("--recursive", "-r", action="store_true", help="Alt klasörlere in.")
@@ -101,9 +106,64 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _run_doctor() -> int:
+    """Comprehensive health report: hardware, encoders, disk, version.
+    Returns 0 if all critical checks pass, 1 otherwise.
+    """
+    from video_extender.core.encoders import ENCODER_REGISTRY
+    from video_extender.core.hardware import detect, free_ram_mb, probe_encoder
+
+    print(f"video-extender {__version__}")
+    print(f"Python: {sys.version.split()[0]}  ({sys.platform})")
+    print()
+
+    hw = detect()
+    print(f"ffmpeg:  {hw.ffmpeg_path or '<NOT FOUND>'}")
+    print(f"ffprobe: {hw.ffprobe_path or '<NOT FOUND>'}")
+    if not hw.ffmpeg_path or not hw.ffprobe_path:
+        print("\n  ✗ KRITIK: ffmpeg veya ffprobe PATH'te yok.", file=sys.stderr)
+        return 1
+
+    print(f"\nCPU: {hw.cpu_count} core, RAM total: {hw.ram_total_mb} MB, "
+          f"free: {free_ram_mb()} MB")
+
+    if hw.gpus:
+        print("\nGPU(s):")
+        for g in hw.gpus:
+            encs = ", ".join(g.encoders) if g.encoders else "(no encoders)"
+            print(f"  - [{g.vendor}] {g.name} → {encs}")
+    else:
+        print("\nGPU: none detected (CPU encoding will be used)")
+
+    print("\nEncoder durumu:")
+    print(f"  {'encoder':22s} {'codec':6s} {'kind':4s} {'listed':6s} {'functional'}")
+    print("  " + "-" * 60)
+    any_failed = False
+    for name, cls in sorted(ENCODER_REGISTRY.items(),
+                            key=lambda kv: (kv[1].kind, kv[0])):
+        listed = cls.ffmpeg_encoder in hw.available_encoders
+        functional = probe_encoder(cls.ffmpeg_encoder) if listed else False
+        if listed and not functional:
+            any_failed = True
+        print(f"  {cls.ffmpeg_encoder:22s} {cls.codec:6s} {cls.kind:4s} "
+              f"{'YES' if listed else 'no':6s} {'YES' if functional else 'no'}")
+
+    print()
+    if not hw.available_encoders:
+        print("  ✗ KRITIK: hiç encoder bulunamadı.", file=sys.stderr)
+        return 1
+    if any_failed:
+        print("  ⚠ Uyarı: bazı encoder'lar listede ama probe başarısız "
+              "(driver / cihaz erişim sorunu olabilir).")
+    print("  ✓ Sistem hazır.")
+    return 0
+
+
 def _handle_list_modes(args: argparse.Namespace) -> int | None:
     """If any --list-* flag is set, print the table and return an exit code.
     Returns None when no listing mode is active, signalling main to continue."""
+    if args.doctor:
+        return _run_doctor()
     if args.list_presets:
         for k, preset_cls in sorted(PRESET_REGISTRY.items()):
             print(f"  {k:14s} {preset_cls.label}")

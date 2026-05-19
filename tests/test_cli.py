@@ -77,6 +77,30 @@ class TestParser:
         assert args.gamma == 1.0
 
 
+class TestVersion:
+    def test_version_flag(self, capsys) -> None:
+        """--version prints version and exits 0."""
+        from video_extender.cli import main
+        with pytest.raises(SystemExit) as exc:
+            main(["--version"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        # Pyproject + __init__ both bumped; version string in output.
+        assert "video-extender" in out
+
+
+class TestDoctor:
+    def test_doctor_prints_report(self, capsys) -> None:
+        """--doctor runs a system health report and exits."""
+        from video_extender.cli import main
+        rc = main(["--doctor"])
+        assert rc in (0, 1)  # 0 if all good, 1 only if critical fail
+        out = capsys.readouterr().out
+        assert "video-extender" in out
+        assert "ffmpeg" in out
+        assert "Encoder" in out or "encoder" in out
+
+
 class TestListMode:
     def test_list_presets_outputs_known(self, capsys) -> None:
         from video_extender.cli import main

@@ -197,12 +197,54 @@ class TestExtenderFastPaths:
         assert "lavfi" in encode and "color=c=black" in " ".join(encode)
         assert "concat" in concat
 
-    def test_image_card_has_no_fast_path(self, tmp_path: Path) -> None:
-        """image_card and intro_outro are composition-heavy; no fast path yet."""
+    def test_image_card_fast_path(self, tmp_path: Path) -> None:
+        """image_card with options['image'] → 2-stage fast path."""
+        # Create a small PNG fixture
+        png = tmp_path / "card.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
         ext = EXTENDER_REGISTRY["image_card"]()
-        assert not hasattr(ext, "build_fast_path")
+        from video_extender.core.encoders.libx264 import Libx264
+        enc = Libx264()
+        enc_args = enc.build_args(
+            bitrate_kbps=5000, audio_bitrate_kbps=128, crf=None,
+            gpu_index=None, threads=4,
+        )
+        from video_extender.core.scheduler import WorkerKind, WorkerSlot
+        slot = WorkerSlot(kind=WorkerKind.CPU, encoder="libx264",
+                          threads=4, gpu_index=None, label="t")
+        plan = ext.build_fast_path(
+            source=Path("/tmp/in.mp4"), media=_h264_media(duration=3.0),
+            target_duration=10.0, output=tmp_path / "out.mp4",
+            encoder=enc, encoder_args=enc_args, slot=slot,
+            tmp_dir=tmp_path, audio_fade_out_seconds=1.5,
+            options={"image": str(png)},
+        )
+        assert plan is not None
+        # encode (looped image + silence) + concat-copy → 2 commands
+        assert len(plan.commands) == 2
+
+    def test_image_card_returns_none_without_options(self, tmp_path: Path) -> None:
+        ext = EXTENDER_REGISTRY["image_card"]()
+        from video_extender.core.encoders.libx264 import Libx264
+        enc = Libx264()
+        enc_args = enc.build_args(
+            bitrate_kbps=5000, audio_bitrate_kbps=128, crf=None,
+            gpu_index=None, threads=4,
+        )
+        from video_extender.core.scheduler import WorkerKind, WorkerSlot
+        slot = WorkerSlot(kind=WorkerKind.CPU, encoder="libx264",
+                          threads=4, gpu_index=None, label="t")
+        plan = ext.build_fast_path(
+            source=Path("/tmp/in.mp4"), media=_h264_media(duration=3.0),
+            target_duration=10.0, output=tmp_path / "out.mp4",
+            encoder=enc, encoder_args=enc_args, slot=slot,
+            tmp_dir=tmp_path, audio_fade_out_seconds=1.5,
+            options={},  # missing 'image'
+        )
+        assert plan is None
 
     def test_intro_outro_has_no_fast_path(self) -> None:
+        """intro_outro composition is too complex; deferred."""
         ext = EXTENDER_REGISTRY["intro_outro"]()
         assert not hasattr(ext, "build_fast_path")
 

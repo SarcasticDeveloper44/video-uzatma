@@ -66,6 +66,7 @@ class FreezeExtender(ExtenderStrategy):
         slot: WorkerSlot,
         tmp_dir: Path,
         audio_fade_out_seconds: float,
+        options: dict[str, Any] | None = None,
     ) -> FastPathPlan | None:
         """Three-stage fast path:
           1) Extract the source's last frame to a PNG (cheap).

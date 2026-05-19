@@ -70,6 +70,7 @@ class BlackExtender(ExtenderStrategy):
         slot: WorkerSlot,
         tmp_dir: Path,
         audio_fade_out_seconds: float,
+        options: dict[str, Any] | None = None,
     ) -> FastPathPlan | None:
         """Two-stage fast path:
           1) Encode the black tail from lavfi (no source decode needed —

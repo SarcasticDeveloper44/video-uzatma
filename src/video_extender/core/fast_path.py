@@ -127,6 +127,7 @@ def build_plan(
         slot=slot,
         tmp_dir=tmp_dir,
         audio_fade_out_seconds=spec.audio_fade_out_seconds,
+        options=spec.extender_options or {},
     )
 
 

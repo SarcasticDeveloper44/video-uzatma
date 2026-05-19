@@ -8,7 +8,10 @@ from typing import Any
 
 from pathlib import Path
 
+from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 from video_extender.core.extenders.base import ExtenderPlan, ExtenderStrategy
+from video_extender.core.fast_path import FastPathPlan
+from video_extender.core.scheduler import WorkerSlot
 from video_extender.utils.ffprobe_parser import MediaInfo
 
 
@@ -97,4 +100,73 @@ class ImageCardExtender(ExtenderStrategy):
             filtergraph=filtergraph,
             video_label="[vout]",
             audio_label="[aout]",
+        )
+
+    def build_fast_path(
+        self,
+        *,
+        source: Path,
+        media: MediaInfo,
+        target_duration: float,
+        output: Path,
+        encoder: EncoderBackend,
+        encoder_args: EncoderArgs,
+        slot: WorkerSlot,
+        tmp_dir: Path,
+        audio_fade_out_seconds: float,
+        options: dict[str, Any] | None = None,
+    ) -> FastPathPlan | None:
+        """Two-stage fast path: encode looped image tail at target params,
+        then concat-copy with the source. Same content shape as the full
+        build_plan but with stream-copy of the source segment (3-10x faster
+        for typical card durations).
+        """
+        if media.video is None:
+            return None
+        card_dur = max(0.0, target_duration - media.duration)
+        if card_dur < 0.05:
+            return None
+        opts = options or {}
+        image = opts.get("image")
+        if not image:
+            return None
+        image_path = Path(image)
+        if not image_path.exists():
+            return None
+        fps = media.video.fps if media.video.fps > 0 else 30.0
+        W, H = media.video.width, media.video.height
+
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tail = tmp_dir / f"card_tail_{source.stem}.mp4"
+        listfile = tmp_dir / f"card_concat_{source.stem}.txt"
+        listfile.write_text(
+            f"file '{source.resolve().as_posix()}'\n"
+            f"file '{tail.resolve().as_posix()}'\n",
+            encoding="utf-8",
+        )
+
+        encode_cmd = [
+            "-loop", "1", "-framerate", f"{fps}",
+            "-i", str(image_path),
+            "-f", "lavfi", "-i",
+            f"anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-vf",
+            f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+            *encoder_args.video_args,
+            *encoder_args.audio_args,
+            "-shortest", "-t", f"{card_dur:.3f}",
+            str(tail),
+        ]
+        concat_cmd = [
+            "-f", "concat", "-safe", "0",
+            "-i", str(listfile),
+            "-c", "copy",
+            *encoder_args.container_args,
+            str(output),
+        ]
+        return FastPathPlan(
+            commands=[encode_cmd, concat_cmd],
+            temp_files=[tail, listfile],
+            output=output,
         )

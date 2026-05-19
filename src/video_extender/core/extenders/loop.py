@@ -59,6 +59,7 @@ class LoopExtender(ExtenderStrategy):
         slot: WorkerSlot,
         tmp_dir: Path,
         audio_fade_out_seconds: float,
+        options: dict[str, Any] | None = None,
     ) -> FastPathPlan | None:
         """Loop with stream-copy: one ffmpeg call, NO re-encode.
 
