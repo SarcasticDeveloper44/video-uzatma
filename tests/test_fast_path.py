@@ -242,10 +242,52 @@ class TestExtenderFastPaths:
         )
         assert plan is None
 
-    def test_intro_outro_has_no_fast_path(self) -> None:
-        """intro_outro composition is too complex; deferred."""
+    def test_intro_outro_fast_path_eligibility(self, tmp_path) -> None:
+        """intro_outro fast path (added in v0.12.0) — eligibility requires
+        h264 source matching encoder, yuv420p, AAC audio, and an existing
+        outro path. Missing requirements → returns None."""
         ext = EXTENDER_REGISTRY["intro_outro"]()
-        assert not hasattr(ext, "build_fast_path")
+        assert hasattr(ext, "build_fast_path")
+        from video_extender.core.encoders.libx264 import Libx264
+        enc = Libx264()
+        enc_args = enc.build_args(
+            bitrate_kbps=5000, audio_bitrate_kbps=128, crf=None,
+            gpu_index=None, threads=4,
+        )
+        from video_extender.core.scheduler import WorkerKind, WorkerSlot
+        slot = WorkerSlot(kind=WorkerKind.CPU, encoder="libx264",
+                          threads=4, gpu_index=None, label="t")
+
+        # Missing outro path → None
+        plan = ext.build_fast_path(
+            source=Path("/tmp/in.mp4"), media=_h264_media(),
+            target_duration=30.0, output=tmp_path / "out.mp4",
+            encoder=enc, encoder_args=enc_args, slot=slot,
+            tmp_dir=tmp_path, audio_fade_out_seconds=1.5,
+            options={},
+        )
+        assert plan is None
+
+        # Outro path that doesn't exist → None
+        plan = ext.build_fast_path(
+            source=Path("/tmp/in.mp4"), media=_h264_media(),
+            target_duration=30.0, output=tmp_path / "out.mp4",
+            encoder=enc, encoder_args=enc_args, slot=slot,
+            tmp_dir=tmp_path, audio_fade_out_seconds=1.5,
+            options={"outro": "/no/such/outro.mp4"},
+        )
+        assert plan is None
+
+        # Codec mismatch (vp9 source vs h264 target) → None
+        plan = ext.build_fast_path(
+            source=Path("/tmp/in.mp4"),
+            media=_h264_media(codec="vp9"),
+            target_duration=30.0, output=tmp_path / "out.mp4",
+            encoder=enc, encoder_args=enc_args, slot=slot,
+            tmp_dir=tmp_path, audio_fade_out_seconds=1.5,
+            options={"outro": "/tmp/outro.mp4"},
+        )
+        assert plan is None
 
 
 class TestCleanup:

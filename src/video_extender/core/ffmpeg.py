@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shlex
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -20,6 +22,34 @@ from video_extender.core.hardware import detect
 from video_extender.utils import logging as _logging
 
 log = _logging.get("ffmpeg")
+
+
+def _nice_popen_kwargs() -> dict[str, object]:
+    """Popen kwargs that lower ffmpeg's priority so long batches don't lag
+    the user's interactive use. CPU-only — we don't touch I/O priority
+    because the user might be on a fast NVMe where it doesn't matter, or
+    on a network share where ionice has no effect.
+
+    Linux/macOS: `preexec_fn=os.nice(10)` runs in the forked child before
+    exec, so only the ffmpeg process gets niced (the parent Python stays
+    at normal priority).
+
+    Windows: `creationflags=BELOW_NORMAL_PRIORITY_CLASS` is the equivalent.
+    Equivalent constant value 0x4000 used directly so we don't depend on
+    the platform-specific subprocess attribute (which lives on
+    subprocess.BELOW_NORMAL_PRIORITY_CLASS on Windows but doesn't exist
+    on POSIX).
+    """
+    if sys.platform == "win32":
+        return {"creationflags": 0x4000}  # BELOW_NORMAL_PRIORITY_CLASS
+    # POSIX: nice +10 in the child only. Caught exceptions ensure we never
+    # break ffmpeg start over a niceness adjustment.
+    def _nice_child() -> None:
+        try:
+            os.nice(10)
+        except OSError:
+            pass
+    return {"preexec_fn": _nice_child}
 
 
 @dataclass
@@ -138,10 +168,14 @@ class FFmpegRunner:
         log.info("ffmpeg: %s", shlex.join(cmd))
         with self._lock:
             self._cancelled = False
-            self._proc = subprocess.Popen(
+            # `_nice_popen_kwargs()` returns `creationflags` on Windows and
+            # `preexec_fn` on POSIX — the union doesn't satisfy any single
+            # Popen overload, but the runtime call is correct.
+            self._proc = subprocess.Popen(  # type: ignore[call-overload]
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                **_nice_popen_kwargs(),
             )
         proc = self._proc
 

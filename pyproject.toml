@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-extender"
-version = "0.11.4"
+version = "0.12.0"
 description = "Batch GUI tool to extend and compress social media ad videos"
 requires-python = ">=3.11"
 dependencies = [
