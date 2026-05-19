@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 from video_extender.core.job import ExtendMode, Job, JobSpec
 from video_extender.core.presets.base import PresetParams
-from video_extender.core.scheduler import WorkerKind, WorkerSlot
+from video_extender.core.scheduler import WorkerSlot
 from video_extender.utils.ffprobe_parser import MediaInfo
 
 if TYPE_CHECKING:
@@ -123,7 +123,9 @@ def build_plan(
         gpu_index=slot.gpu_index,
         threads=slot.threads,
     )
-    return builder(
+    # getattr returns Any; the extender's build_fast_path contract is to
+    # return FastPathPlan | None — narrow explicitly for mypy.
+    result: FastPathPlan | None = builder(
         source=Path(job.source),
         media=media,
         target_duration=target,
@@ -135,6 +137,7 @@ def build_plan(
         audio_fade_out_seconds=spec.audio_fade_out_seconds,
         options=spec.extender_options or {},
     )
+    return result
 
 
 def cleanup(plan: FastPathPlan) -> None:

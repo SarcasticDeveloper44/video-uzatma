@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "video-extender"
-version = "0.6.0"
+version = "0.6.1"
 description = "Batch GUI tool to extend and compress social media ad videos"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,3 +17,13 @@ video-extender-gui = "video_extender.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# --- mypy ---
+# strict mode on src/ (the shipping codebase). Test modules use pytest
+# fixture wiring that's conventionally untyped — running them through
+# `mypy --strict tests/` would force annotation of every fixture parameter
+# (over-engineering for test code that's already executed end-to-end).
+[tool.mypy]
+files = ["src"]
+python_version = "3.11"
+strict = true

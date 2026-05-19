@@ -99,7 +99,7 @@ class BlackExtender(ExtenderStrategy):
             "-f", "lavfi", "-i",
             f"color=c=black:s={W}x{H}:r={fps}:d={tail_dur:.3f}",
             "-f", "lavfi", "-i",
-            f"anullsrc=channel_layout=stereo:sample_rate=44100",
+            "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-vf", "format=yuv420p",
             *encoder_args.video_args,
             *encoder_args.audio_args,

@@ -106,7 +106,7 @@ class FreezeExtender(ExtenderStrategy):
             "-loop", "1", "-framerate", f"{fps}",
             "-i", str(last_frame),
             "-f", "lavfi", "-i",
-            f"anullsrc=channel_layout=stereo:sample_rate=44100",
+            "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-vf", f"scale={W}:{H},format=yuv420p",
             *encoder_args.video_args,
             *encoder_args.audio_args,

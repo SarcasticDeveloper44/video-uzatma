@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-import pytest
 
 from video_extender.core.hardware import (
     _os_can_probe, detect, free_ram_mb, is_rotational_disk,

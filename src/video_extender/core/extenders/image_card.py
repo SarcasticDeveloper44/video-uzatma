@@ -149,7 +149,7 @@ class ImageCardExtender(ExtenderStrategy):
             "-loop", "1", "-framerate", f"{fps}",
             "-i", str(image_path),
             "-f", "lavfi", "-i",
-            f"anullsrc=channel_layout=stereo:sample_rate=44100",
+            "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-vf",
             f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
             f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",

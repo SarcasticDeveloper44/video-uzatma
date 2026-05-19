@@ -16,7 +16,7 @@ def _patch_bundled_ffmpeg_path() -> None:
 
     No-op when running from source (sys.frozen is unset)."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        meipass = sys._MEIPASS  # type: ignore[attr-defined]
+        meipass = sys._MEIPASS
         os.environ["PATH"] = meipass + os.pathsep + os.environ.get("PATH", "")
 
 

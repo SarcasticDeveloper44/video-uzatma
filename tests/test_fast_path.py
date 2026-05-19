@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from video_extender.core import fast_path
 from video_extender.core.extenders import EXTENDER_REGISTRY
