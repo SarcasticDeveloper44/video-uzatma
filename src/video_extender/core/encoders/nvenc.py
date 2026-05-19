@@ -5,6 +5,23 @@ from typing import Any
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
 
+_NVENC_PRESET_BY_HINT = {"speed": "p4", "quality": "p6"}
+
+
+def _nvenc_preset(extra: dict[str, Any] | None) -> str:
+    """Pick NVENC preset (p1=fastest..p7=slowest).
+
+    Explicit `preset` in extra wins. Otherwise `preset_hint` ("speed" | "quality")
+    chooses p4 or p6. Default falls back to p5 (current behaviour)."""
+    extra = extra or {}
+    if "preset" in extra:
+        return str(extra["preset"])
+    hint = extra.get("preset_hint")
+    if hint in _NVENC_PRESET_BY_HINT:
+        return _NVENC_PRESET_BY_HINT[hint]
+    return "p5"
+
+
 class NvencH264(EncoderBackend):
     name = "nvenc_h264"
     label = "NVIDIA NVENC H.264 (GPU)"
@@ -22,7 +39,7 @@ class NvencH264(EncoderBackend):
         extra: dict[str, Any] | None = None,
     ) -> EncoderArgs:
         # NVENC: use VBR with target bitrate; CQ when crf provided.
-        v: list[str] = ["-c:v", self.ffmpeg_encoder, "-preset", "p5", "-tune", "hq"]
+        v: list[str] = ["-c:v", self.ffmpeg_encoder, "-preset", _nvenc_preset(extra), "-tune", "hq"]
         if gpu_index is not None:
             v += ["-gpu", str(gpu_index)]
         if crf is not None:
@@ -66,7 +83,7 @@ class NvencHevc(EncoderBackend):
     ) -> EncoderArgs:
         # HEVC compresses ~30% better than H.264, so we drop the target bitrate
         # accordingly for similar perceived quality. tag:v hvc1 ensures iOS/Safari playback.
-        v: list[str] = ["-c:v", self.ffmpeg_encoder, "-preset", "p5", "-tag:v", "hvc1"]
+        v: list[str] = ["-c:v", self.ffmpeg_encoder, "-preset", _nvenc_preset(extra), "-tag:v", "hvc1"]
         if gpu_index is not None:
             v += ["-gpu", str(gpu_index)]
         hevc_bitrate = int(bitrate_kbps * 0.7)

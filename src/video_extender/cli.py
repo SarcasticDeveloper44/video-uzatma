@@ -51,6 +51,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quality", "-q", choices=["low", "medium", "high"], default="medium")
     p.add_argument("--codec", "-c", choices=["h264", "hevc"], default="h264",
                    help="Video codec (varsayilan: h264). HEVC ~%%30 daha kucuk dosya, ama bazi reklam platformlarinda reddedilebilir.")
+    p.add_argument("--crf", type=int, default=None,
+                   help="CRF/CQ degeri (0..51). Belirtilirse VBR bitrate yerine sabit kalite modu kullanilir (daha iyi kalite/boyut). Tipik: 23 = standart, 18 = yuksek kalite, 28 = dusuk.")
+    p.add_argument("--encoder-preset", default="auto",
+                   help="Encoder speed/effort preset. Auto: source uzunluguna gore. Acik degerler encoder'a verbatim: libx264 ultrafast..veryslow / nvenc p1..p7.")
     p.add_argument("--encoder", type=str, default=None,
                    help="ffmpeg encoder ismini zorla (ornek: libx264, h264_nvenc, hevc_vaapi). Bos: otomatik secim.")
     p.add_argument("--max-parallel", type=int, default=None,
@@ -239,6 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         extender_name=args.method, preset_name=args.preset,
         quality=args.quality, video_codec=args.codec,
         encoder_override=args.encoder, max_parallel=args.max_parallel,
+        quality_mode="crf" if args.crf is not None else "bitrate",
+        crf=args.crf,
+        encoder_preset=args.encoder_preset,
         filters=tuple(filters), filter_options=filter_options,
         extender_options=extender_options,
         filename_template=args.filename_template,

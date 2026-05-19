@@ -10,8 +10,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
+from typing import Any
 
 from video_extender.core import config as _config
+from video_extender.core import fast_path as _fast_path
 from video_extender.core import probe as _probe
 from video_extender.core.encoders import ENCODER_REGISTRY
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
@@ -24,7 +26,7 @@ from video_extender.core.hardware import HardwareInfo, detect
 from video_extender.core.job import ExtendMode, Job, JobSpec, JobStatus
 from video_extender.core.presets import PRESET_REGISTRY
 from video_extender.core.presets.base import PresetParams
-from video_extender.core.scheduler import SchedulePlan, WorkerSlot, plan
+from video_extender.core.scheduler import SchedulePlan, WorkerKind, WorkerSlot, plan
 from video_extender.utils import logging as _logging
 from video_extender.utils.paths import ensure_output_dir, safe_output_path
 
@@ -195,12 +197,27 @@ def build_job_command(job: Job, slot: WorkerSlot, hw: HardwareInfo) -> BuiltComm
     # Encoder args resolved early because GPU-class encoders contribute a
     # terminal upload filter to the filter_complex and prepend hw_init_args
     # ahead of every -i flag.
+    # CRF mode: when spec.quality_mode == "crf", pass spec.crf to the encoder
+    # (which then uses CRF/CQ instead of VBR — better quality-to-size).
+    crf_value = spec.crf if spec.quality_mode == "crf" else None
+    # Adaptive encoder preset: "auto" lets the encoder pick a sensible default
+    # for the job shape (long extension → speed; short → quality).
+    extra: dict[str, Any] = {}
+    if spec.encoder_preset != "auto":
+        extra["preset"] = spec.encoder_preset
+    else:
+        # Heuristic: extension > 5 minutes → speed-leaning preset.
+        if target > 300:
+            extra["preset_hint"] = "speed"
+        else:
+            extra["preset_hint"] = "quality"
     enc_args: EncoderArgs = encoder.build_args(
         bitrate_kbps=params.bitrate_kbps,
         audio_bitrate_kbps=params.audio_bitrate_kbps,
-        crf=None,
+        crf=crf_value,
         gpu_index=slot.gpu_index,
         threads=slot.threads,
+        extra=extra,
     )
 
     filter_complex, map_v, map_a = _compose_filter_complex(
@@ -282,6 +299,66 @@ def _apply_ffmpeg_result(
         _config.mark_failed(state_file, job.source, job.error)
 
 
+def _try_fast_path(
+    job: Job,
+    slot: WorkerSlot,
+    hw: HardwareInfo,
+    runner: FFmpegRunner,
+    stderr_log: Path | None,
+    on_progress: ProgressFn | None,
+) -> bool:
+    """Attempt the stream-copy fast path. Returns True iff completed successfully.
+
+    Any failure (eligibility, ffmpeg non-zero, exception) returns False so the
+    caller falls through to the standard re-encode pipeline. Temp files are
+    cleaned up either way.
+    """
+    assert job.spec is not None and job.media is not None and job.output is not None
+    spec = job.spec
+    eligible, reason = _fast_path.is_eligible(job, spec)
+    if not eligible:
+        log.debug("fast path skip [%s]: %s", job.source.name, reason)
+        return False
+    try:
+        extender = _resolve_extender(spec)
+        params = _resolve_preset_params(spec)
+        encoder = _resolve_encoder_for_slot(slot, hw)
+        tmp_dir = job.output.parent / ".video_extender_tmp"
+        plan_obj = _fast_path.build_plan(
+            job, spec, job.media, extender, encoder, params, slot, tmp_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("fast path plan failed [%s]: %s", job.source.name, exc)
+        return False
+    if plan_obj is None:
+        log.debug("fast path: extender %s has no fast variant", spec.extender_name)
+        return False
+
+    log.info("→ %s [%s] FAST PATH (%d cmd(s))",
+             job.source.name, slot.label, len(plan_obj.commands))
+    try:
+        for i, argv in enumerate(plan_obj.commands):
+            # Reuse the same stderr log file across stages; append per stage.
+            stage_log = stderr_log
+            result = runner.run(argv, stderr_log_path=stage_log)
+            if not result.success:
+                tail = result.stderr_log.splitlines()[-5:]
+                log.warning("fast path stage %d failed: %s", i,
+                            ' | '.join(tail))
+                return False
+        # Success → mark job and trigger progress update.
+        job.progress = 1.0
+        job.status = JobStatus.COMPLETED
+        if on_progress:
+            on_progress(job)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("fast path execution exception [%s]: %s", job.source.name, exc)
+        return False
+    finally:
+        _fast_path.cleanup(plan_obj)
+
+
 def execute_job(
     job: Job,
     slot: WorkerSlot,
@@ -310,6 +387,13 @@ def execute_job(
             log_stem = job.output.stem if job.output else job.source.stem
             stderr_log = log_dir / f"{log_stem}.ffmpeg.log"
             job.stderr_log = stderr_log
+
+        # Try the stream-copy fast path first. Any failure (eligibility miss,
+        # ffmpeg error, exception) silently falls through to the full encode.
+        if _try_fast_path(job, slot, hw, runner, stderr_log, on_progress):
+            if state_file is not None and job.output is not None:
+                _config.mark_completed(state_file, job.source, job.output, job.spec)
+            return job
 
         cb = _make_progress_callback(job, built.target_duration, on_progress)
         result: FFmpegResult = runner.run(built.args, on_progress=cb, stderr_log_path=stderr_log)
@@ -379,6 +463,7 @@ class BatchRunner:
             len(pending), hw=self.hw, codec=self.spec.video_codec,
             encoder_override=self.spec.encoder_override,
             max_parallel_override=self.spec.max_parallel,
+            source_folder=self.source_folder,
         )
         self._dispatch_pool(pending, sched, state_path, log_dir)
         self._final_sweep()
@@ -414,16 +499,32 @@ class BatchRunner:
         log_dir: Path,
     ) -> None:
         """Submit each pending job to a worker slot and collect results.
-        Unhandled worker exceptions are mapped back to the originating job."""
+        Unhandled worker exceptions are mapped back to the originating job.
+
+        Job ordering: longest job → fastest slot. ThreadPoolExecutor dispatches
+        submissions in FIFO order across workers; sorting before submit puts
+        the heaviest work on GPU encoders (much faster than CPU) so the batch
+        critical path is bound by GPU throughput, not by a long-tail CPU job
+        running after all GPU slots are idle.
+        """
         worker_count = sched.total_workers
         with self._lock:
             self._runners = [FFmpegRunner() for _ in range(worker_count)]
-        slots = list(sched.slots)
+        # Sort slots GPU-first so index 0 = fastest encoder available.
+        slots = sorted(
+            sched.slots,
+            key=lambda s: 0 if s.kind == WorkerKind.GPU else 1,
+        )
+        # Sort jobs longest-first; unknown durations (probe-failed) sink to end.
+        ordered = sorted(
+            pending,
+            key=lambda j: -(j.media.duration if j.media else 0.0),
+        )
 
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vx") as pool:
             future_to_job: dict[Future[Job], Job] = {}
 
-            for i, job in enumerate(pending):
+            for i, job in enumerate(ordered):
                 slot = slots[i % len(slots)]
                 runner = self._runners[i % len(self._runners)]
 
@@ -482,13 +583,30 @@ class BatchRunner:
 # ---------------------------------------------------------------------------
 
 def build_jobs(sources: list[Path], spec: JobSpec) -> list[Job]:
-    runner = FFmpegRunner()
-    jobs: list[Job] = []
-    for src in sources:
+    """Probe `sources` in parallel and return Jobs in the input order.
+
+    Probing 100 files serially used to take ~30s; parallel probe at 8x cuts
+    it to ~4s. Each subprocess.run is independent, so this scales linearly
+    until disk I/O saturates.
+    """
+    if not sources:
+        return []
+    # Cap concurrency: 8 is more than enough for ffprobe (it's a quick metadata
+    # call). Beyond that we just queue on the subprocess module.
+    max_workers = min(8, len(sources))
+
+    def _probe_one(src: Path) -> Job:
         try:
-            media = _probe.probe_file(src, runner)
-            jobs.append(Job(source=src, media=media, spec=spec))
+            media = _probe.probe_file(src)
+            return Job(source=src, media=media, spec=spec)
         except Exception as exc:  # noqa: BLE001
-            j = Job(source=src, spec=spec, status=JobStatus.FAILED, error=f"probe failed: {exc}")
-            jobs.append(j)
-    return jobs
+            return Job(
+                source=src, spec=spec, status=JobStatus.FAILED,
+                error=f"probe failed: {exc}",
+            )
+
+    results: dict[Path, Job] = {}
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="probe") as pool:
+        for src, job in zip(sources, pool.map(_probe_one, sources), strict=True):
+            results[src] = job
+    return [results[src] for src in sources]

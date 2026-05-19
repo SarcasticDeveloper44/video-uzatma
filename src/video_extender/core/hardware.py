@@ -314,6 +314,143 @@ def _assign_encoders_to_gpus(gpus: list[GpuInfo], encoders: frozenset[str]) -> l
     return out
 
 
+# ---------------------------------------------------------------------------
+# Dynamic resource probes (NOT cached — these change as system load shifts)
+# ---------------------------------------------------------------------------
+
+def free_ram_mb() -> int:
+    """Currently-available RAM (MB). Used by the scheduler to back off when
+    memory is tight (1080p × N parallel jobs can OOM on small boxes)."""
+    sys_name = platform.system()
+    if sys_name == "Linux":
+        try:
+            with Path("/proc/meminfo").open(encoding="ascii") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) // 1024
+        except (OSError, ValueError):
+            pass
+    elif sys_name == "Darwin":
+        try:
+            # vm_stat reports free / inactive / speculative pages × page_size.
+            out = subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, timeout=3, check=True,
+            ).stdout
+            page_size = 16384  # Apple Silicon default; Intel is 4096 — close enough
+            free_pages = 0
+            for line in out.splitlines():
+                low = line.lower()
+                if any(t in low for t in ("pages free", "pages inactive", "pages speculative")):
+                    n = line.split(":")[-1].strip().rstrip(".")
+                    try:
+                        free_pages += int(n)
+                    except ValueError:
+                        continue
+            return (free_pages * page_size) // (1024 * 1024)
+        except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+            pass
+    elif sys_name == "Windows":
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            # FreePhysicalMemory is in KB.
+            return int(out) // 1024
+        except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+            pass
+    return 0
+
+
+@lru_cache(maxsize=32)
+def is_rotational_disk(path_str: str) -> bool:
+    """True if `path` lives on a rotational (HDD) device. False for SSD/NVMe
+    or when detection fails (we then assume SSD — the modern default).
+
+    Cached per resolved mount point because the lookup involves several syscalls
+    and the answer doesn't change at runtime."""
+    try:
+        p = Path(path_str).resolve()
+    except OSError:
+        return False
+    sys_name = platform.system()
+    if sys_name == "Linux":
+        return _linux_is_rotational(p)
+    if sys_name == "Darwin":
+        return _macos_is_rotational(p)
+    if sys_name == "Windows":
+        return _windows_is_rotational(p)
+    return False
+
+
+def _linux_is_rotational(path: Path) -> bool:
+    try:
+        # Find the block device for this path's mount.
+        out = subprocess.run(
+            ["findmnt", "-no", "SOURCE", "-T", str(path)],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout.strip()
+        # E.g. /dev/sda1 → strip partition digits to get /dev/sda → /sys/block/sda.
+        dev = Path(out).name
+        # Strip trailing partition digits (sda1 → sda, nvme0n1p1 → nvme0n1).
+        base = dev
+        if base.startswith("nvme"):
+            base = base.split("p", 1)[0] if "p" in base else base
+            # NVMe is always non-rotational
+            return False
+        else:
+            base = base.rstrip("0123456789")
+        rot_path = Path("/sys/block") / base / "queue" / "rotational"
+        if rot_path.exists():
+            return rot_path.read_text(encoding="ascii").strip() == "1"
+    except (subprocess.SubprocessError, OSError, FileNotFoundError, ValueError):
+        pass
+    return False
+
+
+def _macos_is_rotational(path: Path) -> bool:
+    try:
+        # diskutil info -plist <mount> exposes SolidState bool.
+        # Use the mount root to keep diskutil happy.
+        out = subprocess.run(
+            ["diskutil", "info", "-plist", str(path)],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+        # Parse the SolidState key without importing plistlib (fast path).
+        if "<key>SolidState</key>" in out:
+            # The value is the next <true/> or <false/> tag.
+            idx = out.index("<key>SolidState</key>")
+            tail = out[idx:]
+            if "<true/>" in tail.split("</dict>", 1)[0]:
+                return False
+            if "<false/>" in tail.split("</dict>", 1)[0]:
+                return True
+    except (subprocess.SubprocessError, OSError, FileNotFoundError, ValueError):
+        pass
+    return False
+
+
+def _windows_is_rotational(path: Path) -> bool:
+    try:
+        drive = path.drive  # e.g. "C:"
+        if not drive:
+            return False
+        # MediaType 5 = HDD, 4 = SSD, 3 = SCM, 0 = unspecified. Storage stack.
+        # Use Get-PhysicalDisk + Win32_DiskDrive mapping (heuristic).
+        script = (
+            "$d=(Get-PhysicalDisk | Where-Object MediaType -ne 'Unspecified' | "
+            "Select-Object -First 1 -ExpandProperty MediaType); $d"
+        )
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, timeout=8,
+        ).stdout.strip().upper()
+        return out == "HDD"
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
+        return False
+
+
 @lru_cache(maxsize=1)
 def detect() -> HardwareInfo:
     ffmpeg = shutil.which("ffmpeg")

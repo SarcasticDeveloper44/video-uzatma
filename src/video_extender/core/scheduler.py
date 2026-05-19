@@ -11,10 +11,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from video_extender.core.hardware import HardwareInfo, detect, probe_encoder
+from pathlib import Path
+
+from video_extender.core.hardware import (
+    HardwareInfo, detect, free_ram_mb, is_rotational_disk, probe_encoder,
+)
 from video_extender.utils import logging as _logging
 
 log = _logging.get("scheduler")
+
+# Adaptive resource policy — picks values dynamically from the running system,
+# not from hardcoded constants.
+# Free RAM (MB) needed per parallel CPU worker for typical 1080p libx264 encode.
+# (Empirical: ~600 MB peak; 800 gives comfortable headroom.)
+_RAM_PER_CPU_WORKER_MB = 800
+# Rotational disks throttle when many concurrent readers seek. Empirically
+# 2 parallel ffmpeg jobs is the sweet spot for HDDs; more = thrashing.
+_HDD_PARALLEL_CAP = 2
 
 
 class WorkerKind(StrEnum):
@@ -77,6 +90,7 @@ def _plan_with_override(
     override: str,
     probe_gpu: bool,
     max_parallel_override: int | None,
+    source_folder: Path | None = None,
 ) -> SchedulePlan:
     """Build a plan where every worker uses the user-forced encoder."""
     if override not in hw.available_encoders:
@@ -106,6 +120,8 @@ def _plan_with_override(
     else:
         cpu_cap = max(1, hw.cpu_count // 4)
         cpu_cap = min(cpu_cap, max(1, job_count))
+        log_fn = log.info if probe_gpu else log.debug
+        cpu_cap = _adaptive_parallel_ceiling(cpu_cap, source_folder=source_folder, log_fn=log_fn)
         threads_each = _threads_per_cpu_job(hw, cpu_cap)
         for i in range(cpu_cap):
             slots.append(WorkerSlot(
@@ -152,6 +168,40 @@ def _threads_per_cpu_job(hw: HardwareInfo, parallel_jobs: int) -> int:
     return min(per, 8)
 
 
+def _adaptive_parallel_ceiling(
+    base_ceiling: int,
+    *,
+    source_folder: Path | None,
+    log_fn: object,
+) -> int:
+    """Reduce `base_ceiling` based on live system signals.
+
+    - HDD source → cap at _HDD_PARALLEL_CAP (avoid seek thrashing).
+    - Free RAM low → cap by `free_ram_mb / _RAM_PER_CPU_WORKER_MB`.
+    These are dynamic — re-evaluated each plan call against the real system.
+    """
+    ceiling = base_ceiling
+    if source_folder is not None:
+        try:
+            if is_rotational_disk(str(source_folder)):
+                ceiling = min(ceiling, _HDD_PARALLEL_CAP)
+                if callable(log_fn):
+                    log_fn("source on HDD → parallel capped to %d", _HDD_PARALLEL_CAP)
+        except Exception:  # noqa: BLE001
+            pass
+    free_mb = free_ram_mb()
+    if free_mb > 0:
+        ram_cap = max(1, free_mb // _RAM_PER_CPU_WORKER_MB)
+        if ram_cap < ceiling:
+            ceiling = ram_cap
+            if callable(log_fn):
+                log_fn(
+                    "free RAM %d MB → parallel capped to %d (~%d MB per worker)",
+                    free_mb, ram_cap, _RAM_PER_CPU_WORKER_MB,
+                )
+    return max(1, ceiling)
+
+
 def plan(
     job_count: int,
     *,
@@ -160,6 +210,7 @@ def plan(
     codec: str = "h264",
     probe_gpu: bool = True,
     encoder_override: str | None = None,
+    source_folder: Path | None = None,
 ) -> SchedulePlan:
     """Build an optimal slot plan for `job_count` jobs.
 
@@ -173,12 +224,19 @@ def plan(
     `probe_gpu` (default True) verifies each GPU encoder can actually init
     before allocating slots for it. Pass False for unit tests against
     synthetic HardwareInfo.
+
+    `source_folder` is used to detect rotational vs SSD storage; HDD sources
+    get an aggressive parallel cap to avoid seek thrashing. GPU slots are
+    unaffected (NVENC reads sequentially per session).
     """
     hw = hw or detect()
     slots: list[WorkerSlot] = []
 
     if encoder_override:
-        return _plan_with_override(job_count, hw, encoder_override, probe_gpu, max_parallel_override)
+        return _plan_with_override(
+            job_count, hw, encoder_override, probe_gpu, max_parallel_override,
+            source_folder=source_folder,
+        )
 
     cpu_encoder = _pick_cpu_encoder(hw.available_encoders, codec)
 
@@ -219,6 +277,9 @@ def plan(
     # Aim: keep total parallel work ≈ min(job_count, sane_cap).
     cpu_cap = max(1, hw.cpu_count // 4)  # 32 cores -> 8 CPU workers
     cpu_cap = min(cpu_cap, max(1, job_count))  # don't spawn idle workers
+    # Live resource pressure (HDD source / low free RAM) can shrink this further.
+    log_fn = log.info if probe_gpu else log.debug
+    cpu_cap = _adaptive_parallel_ceiling(cpu_cap, source_folder=source_folder, log_fn=log_fn)
     if gpu_slot_count >= job_count:
         cpu_slot_count = 0
     else:

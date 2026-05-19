@@ -4,6 +4,18 @@ from typing import Any
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
 
+_X264_PRESET_BY_HINT = {"speed": "fast", "quality": "slow"}
+
+
+def _x264_preset(extra: dict[str, Any] | None) -> str:
+    extra = extra or {}
+    if "preset" in extra:
+        return str(extra["preset"])
+    hint = extra.get("preset_hint")
+    if hint in _X264_PRESET_BY_HINT:
+        return _X264_PRESET_BY_HINT[hint]
+    return "medium"
+
 
 class Libx264(EncoderBackend):
     name = "libx264"
@@ -23,7 +35,7 @@ class Libx264(EncoderBackend):
     ) -> EncoderArgs:
         v: list[str] = [
             "-c:v", self.ffmpeg_encoder,
-            "-preset", "medium",
+            "-preset", _x264_preset(extra),
             "-pix_fmt", "yuv420p",
             "-profile:v", "high",
             "-threads", str(max(1, threads)),

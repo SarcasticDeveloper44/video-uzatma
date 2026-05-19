@@ -36,6 +36,16 @@ class JobSpec:
     video_codec: str = "h264"          # "h264" | "hevc" | "av1" | "vp9"
     encoder_override: str | None = None  # ffmpeg encoder name (e.g. "libx264") to force; None = auto-pick
     max_parallel: int | None = None      # cap number of parallel workers; None = auto
+    # Quality mode: "bitrate" (VBR, current default — predictable file size)
+    # or "crf" (constant quality, better quality-to-size ratio for VOD).
+    # When "crf", `crf` field is the target value (libx264: 0=lossless, 23=default,
+    # 28=lower quality; nvenc maps internally).
+    quality_mode: str = "bitrate"
+    crf: int | None = None
+    # Encoder speed/effort knob: "auto" picks per-encoder based on extender +
+    # source duration; explicit values forward to the encoder verbatim
+    # (libx264: ultrafast..veryslow; nvenc: p1..p7).
+    encoder_preset: str = "auto"
     filters: tuple[str, ...] = ()      # filter chain names, in order
     filter_options: dict[str, Any] = field(default_factory=dict)
     extender_options: dict[str, Any] = field(default_factory=dict)
