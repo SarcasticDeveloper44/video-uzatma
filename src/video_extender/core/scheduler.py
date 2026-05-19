@@ -8,9 +8,10 @@ Strategy:
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from enum import StrEnum
-
+from functools import lru_cache
 from pathlib import Path
 
 from video_extender.core.hardware import (
@@ -58,10 +59,63 @@ class SchedulePlan:
         return tuple(s for s in self.slots if s.kind == WorkerKind.CPU)
 
 
-# NVENC concurrent session caps differ by GPU class.
-# Consumer GeForce cards (RTX 30/40) accept many sessions via the patched driver;
-# we cap conservatively at 3 to avoid driver throttling. Quadro/RTX A series: unlimited.
-NVENC_SESSIONS_PER_GPU = 3
+# NVENC concurrent session caps. Consumer GeForce cards historically capped
+# at 3-5 sessions; recent drivers (>= 550) lift that significantly on
+# RTX 30/40 series. We probe the actual limit at first use; the fallback
+# (3) matches what we had before — safe for any GPU.
+_NVENC_DEFAULT_SESSIONS = 3
+NVENC_SESSIONS_PER_GPU = _NVENC_DEFAULT_SESSIONS  # legacy module-level export
+
+
+@lru_cache(maxsize=4)
+def _detect_nvenc_session_limit() -> int:
+    """Probe the driver for the NVENC session limit by spawning encoding
+    sessions until one fails. Cached per-process: we run this at most once.
+
+    Result is bounded [1, 16]: we'll never spawn more than 16 even if the
+    driver claims it can handle more (memory pressure becomes the binding
+    constraint at that point).
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return _NVENC_DEFAULT_SESSIONS
+    if not probe_encoder("h264_nvenc"):
+        return _NVENC_DEFAULT_SESSIONS
+
+    # Strategy: spawn N concurrent 1-second encodes; the highest N that
+    # succeeds is the session limit. We test 3, 5, 8 — only escalate when
+    # the prior tier succeeded.
+    import concurrent.futures
+    import subprocess
+
+    def _one_session() -> bool:
+        try:
+            r = subprocess.run(
+                [
+                    ffmpeg, "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "nullsrc=s=128x128:d=0.2",
+                    "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-",
+                ],
+                capture_output=True, timeout=8,
+            )
+            return r.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            return False
+
+    best = _NVENC_DEFAULT_SESSIONS
+    for n in (3, 5, 8):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+                results = list(pool.map(lambda _: _one_session(), range(n)))
+            if all(results):
+                best = n
+            else:
+                break
+        except Exception:  # noqa: BLE001
+            break
+    return min(16, best)
+
+
 
 
 _GPU_ENCODER_PREFERENCE: dict[str, tuple[str, ...]] = {
@@ -108,7 +162,7 @@ def _plan_with_override(
             if override in gpu.encoders:
                 gpu_idx = idx
                 break
-        sessions = NVENC_SESSIONS_PER_GPU if override.endswith("_nvenc") else 1
+        sessions = _detect_nvenc_session_limit() if override.endswith("_nvenc") else 1
         sessions = min(sessions, job_count)
         for s in range(sessions):
             label_suffix = f"/session{s+1}" if sessions > 1 else ""
@@ -261,7 +315,7 @@ def plan(
 
             # Session count: NVIDIA's NVENC chip supports concurrent sessions;
             # other GPU encoders typically serialize internally — 1 slot each.
-            sessions = NVENC_SESSIONS_PER_GPU if gpu.vendor == "nvidia" else 1
+            sessions = _detect_nvenc_session_limit() if gpu.vendor == "nvidia" else 1
             for s in range(sessions):
                 label_suffix = f"/session{s+1}" if sessions > 1 else ""
                 slots.append(WorkerSlot(

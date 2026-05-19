@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         for panel in (self.settings_panel, self.presets_panel, self.filters_panel):
             panel.changed.connect(self._refresh_summary)
         self.profiles_panel.profile_loaded.connect(lambda _s: self._refresh_summary())
+        self.profiles_panel.reset_requested.connect(self._reset_to_defaults)
 
         self.signals.job_added.connect(self._on_job_added)
         self.signals.job_updated.connect(self._on_job_updated)
@@ -477,6 +478,93 @@ class MainWindow(QMainWindow):
         # Make the detail box wider/taller
         dlg.setStyleSheet("QTextEdit { min-width: 900px; min-height: 480px; }")
         dlg.exec()
+
+    def _reset_to_defaults(self) -> None:
+        """Wipe QSettings + restore every panel to factory defaults.
+
+        Used when settings get into a confused state (corrupt QSettings file,
+        user wants to start fresh, etc.). Asks for confirmation; the action
+        cannot be undone.
+        """
+        if self._batch_thread is not None and self._batch_thread.isRunning():
+            QMessageBox.information(
+                self, "İşlem devam ediyor",
+                "Bir batch çalışırken sıfırlama yapılamaz. Önce iptal et.",
+            )
+            return
+        reply = QMessageBox.question(
+            self, "Varsayılana Döndür",
+            "Tüm ayarlar, son seçili klasör, pencere geometrisi ve son spec "
+            "sıfırlanacak.\nBu işlem geri alınamaz. Devam edilsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 1) Wipe persisted QSettings (window geometry, last spec, last folder).
+        qs = QSettings("video-extender", "video-extender")
+        qs.clear()
+        qs.sync()
+
+        # 2) Reset SettingsPanel defaults (mirrors widget construction defaults).
+        sp = self.settings_panel
+        sp.duration_input.setValue(30)
+        sp.unit_combo.setCurrentText("dakika")
+        sp.add_radio.setChecked(True)
+        freeze_idx = sp.method_combo.findData("freeze")
+        if freeze_idx >= 0:
+            sp.method_combo.setCurrentIndex(freeze_idx)
+        sp.quality_combo.setCurrentText("medium")
+        sp.codec_combo.setCurrentIndex(0)  # h264
+        sp.encoder_combo.setCurrentIndex(0)  # auto
+        sp.parallel_slider.setValue(0)  # auto
+        sp.fade_spin.setValue(1.5)
+        sp.filename_template.setText("{name}_extended.{ext}")
+        sp.intro_path.setText("")
+        sp.outro_path.setText("")
+        sp.endcard_path.setText("")
+
+        # 3) PresetsPanel → tiktok.
+        tt_idx = self.presets_panel.combo.findData("tiktok")
+        if tt_idx >= 0:
+            self.presets_panel.combo.setCurrentIndex(tt_idx)
+
+        # 4) FiltersPanel defaults.
+        fp = self.filters_panel
+        fp.normalize_cb.setChecked(True)
+        fp.strip_cb.setChecked(True)
+        fp.final_fade_cb.setChecked(False)
+        fp.wm_cb.setChecked(False)
+        fp.wm_path.setText("")
+        fp.wm_position.setCurrentText("bottom-right")
+        fp.wm_opacity.setValue(0.8)
+        fp.subs_cb.setChecked(False)
+        fp.subs_path.setText("")
+        fp.subs_font_size.setValue(24)
+        fp.aspect_cb.setChecked(False)
+        fp.aspect_target.setCurrentIndex(0)
+        fp.aspect_mode.setCurrentText("blur_pad")
+        fp.cg_cb.setChecked(False)
+        fp.cg_brightness.setValue(0.0)
+        fp.cg_contrast.setValue(1.0)
+        fp.cg_saturation.setValue(1.0)
+        fp.cg_gamma.setValue(1.0)
+
+        # 5) Clear current job list + folder selection.
+        self._jobs = []
+        self.video_list.clear_rows()
+        self.folder_picker._folder = None
+        self.folder_picker.path_label.setText(
+            "<i>Henüz klasör seçilmedi — klasörü buraya sürükleyebilirsin.</i>"
+        )
+        self.folder_picker.recursive_cb.setChecked(False)
+
+        # 6) Reset window geometry to defaults.
+        self.resize(1100, 720)
+
+        self._refresh_summary()
+        self.statusBar().showMessage("Ayarlar varsayılana döndürüldü.")
 
     def _run_initial_preflight(self) -> None:
         report = _preflight.run()

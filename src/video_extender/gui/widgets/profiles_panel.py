@@ -15,6 +15,7 @@ from video_extender.core.job import JobSpec
 
 class ProfilesPanel(QFrame):
     profile_loaded = Signal(object)  # emits JobSpec
+    reset_requested = Signal()       # user clicked "Varsayılana Döndür"
 
     def __init__(
         self,
@@ -38,6 +39,24 @@ class ProfilesPanel(QFrame):
         row.addWidget(save_btn)
         row.addWidget(load_btn)
         layout.addLayout(row)
+
+        # Separator + reset button. Reset wipes QSettings + restores all
+        # panels to factory defaults. Confirmation dialog is wired in
+        # MainWindow so the panel stays UI-free for testing.
+        layout.addSpacing(20)
+        reset_label = QLabel(
+            "<small style='color:#888;'>Ayarlar bozulduysa veya temiz başlamak "
+            "istiyorsan tüm spec'i, pencere boyutunu ve son klasörü sıfırla:</small>"
+        )
+        reset_label.setWordWrap(True)
+        layout.addWidget(reset_label)
+
+        reset_btn = QPushButton("⟲ Varsayılana Döndür")
+        reset_btn.setStyleSheet(
+            "QPushButton { padding: 6px 12px; }"
+        )
+        reset_btn.clicked.connect(self.reset_requested)
+        layout.addWidget(reset_btn)
         layout.addStretch(1)
 
     def _save(self) -> None:

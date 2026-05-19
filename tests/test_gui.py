@@ -350,6 +350,74 @@ class TestSettingsPersistence:
         w2.close()
 
 
+class TestResetToDefaults:
+    def test_reset_clears_all_panels(self, qapp, tmp_path, monkeypatch) -> None:
+        """Reset must restore every panel to factory defaults."""
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.gui.main_window import MainWindow
+        w = MainWindow()
+        # Mutate panels to non-default state
+        w.settings_panel.duration_input.setValue(99)
+        w.settings_panel.unit_combo.setCurrentText("saat")
+        w.settings_panel.codec_combo.setCurrentIndex(1)  # hevc
+        w.filters_panel.wm_cb.setChecked(True)
+        w.filters_panel.wm_path.setText("/tmp/x.png")
+        w.filters_panel.aspect_cb.setChecked(True)
+        w.filters_panel.cg_cb.setChecked(True)
+        w.filters_panel.cg_brightness.setValue(0.5)
+
+        # Trigger reset (modal is auto-stubbed to Yes by conftest)
+        w._reset_to_defaults()
+
+        # All settings should be back to defaults
+        assert w.settings_panel.duration_input.value() == 30
+        assert w.settings_panel.unit_combo.currentText() == "dakika"
+        assert w.settings_panel.video_codec == "h264"
+        assert not w.filters_panel.wm_cb.isChecked()
+        assert w.filters_panel.wm_path.text() == ""
+        assert not w.filters_panel.aspect_cb.isChecked()
+        assert not w.filters_panel.cg_cb.isChecked()
+        assert w.filters_panel.cg_brightness.value() == 0.0
+        assert w.presets_panel.preset_key == "tiktok"
+        # Folder cleared
+        assert w.folder_picker.folder is None
+        # Jobs cleared
+        assert w._jobs == []
+        assert w.video_list.rowCount() == 0
+        w.close()
+
+    def test_reset_blocked_during_batch(self, qapp, vertical_3s, monkeypatch) -> None:
+        """Reset must refuse to run while a batch is in progress."""
+        monkeypatch.setattr(
+            "video_extender.gui.main_window._preflight.run",
+            lambda **_: __import__("video_extender.core.preflight",
+                                   fromlist=["PreflightReport"]).PreflightReport(),
+        )
+        from video_extender.gui.main_window import MainWindow
+        w = MainWindow()
+        # Simulate a running batch — closeEvent will call .cancel() on it
+        # when w.close() runs, so the fake must satisfy that protocol too.
+        class FakeThread:
+            def isRunning(self): return True
+            def cancel(self): pass
+            def wait(self, _timeout=0): pass
+        w._batch_thread = FakeThread()  # type: ignore[assignment]
+        # Mutate one setting
+        w.settings_panel.duration_input.setValue(99)
+        # Reset attempts → should be blocked (modal stub returns Ok = no action taken)
+        w._reset_to_defaults()
+        # Setting should still be 99 (not reset)
+        assert w.settings_panel.duration_input.value() == 99
+        # Detach the fake thread before close so closeEvent doesn't dispatch
+        # cancel/wait on a non-real thread.
+        w._batch_thread = None
+        w.close()
+
+
 class TestRowDoubleClick:
     def test_double_click_failed_job_shows_log(self, qapp, vertical_3s, tmp_path, monkeypatch) -> None:
         """Double-clicking a row should resolve to the underlying Job."""

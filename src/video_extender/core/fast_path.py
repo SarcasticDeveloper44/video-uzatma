@@ -17,13 +17,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from video_extender.core.encoders.base import EncoderArgs, EncoderBackend
-from video_extender.core.extenders.base import ExtenderStrategy
 from video_extender.core.job import ExtendMode, Job, JobSpec
 from video_extender.core.presets.base import PresetParams
 from video_extender.core.scheduler import WorkerKind, WorkerSlot
 from video_extender.utils.ffprobe_parser import MediaInfo
+
+if TYPE_CHECKING:
+    # ExtenderStrategy is referenced only in type hints below; importing it at
+    # runtime would create a cycle (extenders/__init__.py imports the concrete
+    # extender modules, which import FastPathPlan from THIS module).
+    from video_extender.core.extenders.base import ExtenderStrategy  # noqa: F401
 
 
 @dataclass

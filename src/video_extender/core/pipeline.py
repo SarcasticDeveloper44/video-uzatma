@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any
 
 from video_extender.core import config as _config
+from video_extender.core import errors as _errors
 from video_extender.core import fast_path as _fast_path
 from video_extender.core import probe as _probe
 from video_extender.core.encoders import ENCODER_REGISTRY
@@ -337,10 +338,10 @@ def _apply_ffmpeg_result(
         if state_file is not None and job.output is not None:
             _config.mark_completed(state_file, job.source, job.output, job.spec)
         return
-    # Non-zero exit → FAILED with last 5 stderr lines for diagnosis.
+    # Non-zero exit → parse common failure modes into actionable Turkish.
     job.status = JobStatus.FAILED
-    tail = result.stderr_log.splitlines()[-5:]
-    job.error = f"ffmpeg exited {result.returncode}: {' | '.join(tail)}"
+    parsed = _errors.parse_ffmpeg_failure(result.returncode, result.stderr_log)
+    job.error = parsed.format()
     if state_file is not None:
         _config.mark_failed(state_file, job.source, job.error)
 
