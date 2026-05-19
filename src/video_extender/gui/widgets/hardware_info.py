@@ -4,7 +4,6 @@ from __future__ import annotations
 from PySide6.QtWidgets import QFormLayout, QFrame, QLabel, QVBoxLayout, QWidget
 
 from video_extender.core.hardware import detect
-from video_extender.core.scheduler import plan
 
 
 class HardwareInfoWidget(QFrame):
@@ -29,14 +28,7 @@ class HardwareInfoWidget(QFrame):
             form.addRow("GPU:", QLabel("<bulunamadı; CPU kullanılacak>"))
 
         layout.addLayout(form)
-
-        # Scheduler preview for 10 jobs. probe_gpu=False because this is an
-        # info-only display; the real BatchRunner.run() does the functional
-        # probe at the right moment (and result is cached anyway).
-        layout.addWidget(QLabel("<b>10 video için planlanan paralel worker'lar:</b>"))
-        p = plan(10, hw=hw, probe_gpu=False)
-        plan_text = "\n".join(f"  • {s.label}" for s in p.slots)
-        plan_label = QLabel(plan_text)
-        plan_label.setStyleSheet("font-family: monospace; color: #444;")
-        layout.addWidget(plan_label)
+        # The scheduler preview that used to live here was hard-coded to a
+        # mid-grey color that vanished on dark themes. The same information
+        # is available cleanly via the CLI: `video-extender --doctor`.
         layout.addStretch(1)

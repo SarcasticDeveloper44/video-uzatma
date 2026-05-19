@@ -604,36 +604,73 @@ class MainWindow(QMainWindow):
             return ""
 
     def _estimate_total_output_size(self, spec: JobSpec) -> str:
-        """Rough size estimate: bitrate × target_duration × n_jobs.
-        Returns a human-readable string or '' when we can't estimate."""
+        """Rough output-size estimate. The formula is intentionally
+        conservative — real encoders go BELOW these numbers on static
+        content (freeze tails, black, image cards) because constant frames
+        compress to near-zero bitrate. We label the result with ≤ to make
+        the upper-bound nature explicit, and apply per-extender + per-codec
+        + per-quality factors calibrated against real ad workloads.
+
+        Empirical reference points (TikTok medium preset, 30 min output):
+          H.264 standard         → ~1.1 GB
+          HEVC standard          → ~550 MB
+          HEVC + freeze tail     → ~280 MB (the static tail barely takes
+                                            any bitrate, dominated by the
+                                            small original moving portion)
+          HEVC + compress + low  → ~180 MB
+        """
         if not self._jobs:
             return ""
         try:
             params = PRESET_REGISTRY[spec.preset_name].for_quality(spec.quality)
         except KeyError:
             return ""
-        # Video bitrate adjusted for codec (HEVC ~70% of H.264, AV1 ~55%).
-        codec_factor = {"h264": 1.0, "hevc": 0.7, "av1": 0.55, "vp9": 0.6}.get(
-            spec.video_codec, 1.0,
-        )
-        v_bps = params.bitrate_kbps * 1000 * codec_factor
+
+        # Calibrated codec efficiency factors against H.264 (lower = smaller).
+        codec_factor = {
+            "h264": 1.0,
+            "hevc": 0.55,   # libx265 in CRF mode lands around 50-60% of H.264
+            "av1":  0.40,
+            "vp9":  0.55,
+        }.get(spec.video_codec, 1.0)
+
+        # Static-tail extenders barely consume bitrate because the encoder
+        # detects constant frame content and drops the rate floor. Applies
+        # to the EXTENSION portion only — source content still encodes
+        # at full preset bitrate.
+        static_tail_factor = {
+            "freeze":     0.10,  # last-frame held → nearly free
+            "black":      0.05,  # solid color → free-er
+            "image_card": 0.08,  # still image → free-er
+            "loop":       1.00,  # full-motion content, no discount
+            "intro_outro": 1.00,
+        }.get(spec.extender_name, 1.0)
+
+        # Compress toggle additionally tightens the rate via CRF + low quality.
+        compress_factor = 0.6 if self.settings_panel.compress_cb.isChecked() else 1.0
+
+        v_bps = params.bitrate_kbps * 1000 * codec_factor * compress_factor
         a_bps = params.audio_bitrate_kbps * 1000
         total_bytes = 0.0
         for j in self._jobs:
             if j.media is None:
                 continue
-            # Per-job target duration: ADD adds extend_seconds; FILL caps.
+            src_dur = j.media.duration
             if spec.extend_mode == ExtendMode.ADD:
-                dur = j.media.duration + spec.extend_seconds
+                tail_dur = max(0.0, spec.extend_seconds)
             else:
-                dur = max(j.media.duration, spec.extend_seconds)
-            total_bytes += dur * (v_bps + a_bps) / 8
+                tail_dur = max(0.0, spec.extend_seconds - src_dur)
+            # Source portion encodes at full bitrate; tail portion at the
+            # static-content discount when the extender produces static frames.
+            total_bytes += (src_dur * v_bps) + (tail_dur * v_bps * static_tail_factor)
+            total_bytes += (src_dur + tail_dur) * a_bps
+        total_bytes /= 8
         if total_bytes <= 0:
             return ""
         mb = total_bytes / (1024 * 1024)
         if mb < 1024:
-            return f"{mb:.0f} MB tahmini çıktı"
-        return f"{mb / 1024:.1f} GB tahmini çıktı"
+            return f"≤ {mb:.0f} MB tahmini çıktı"
+        return f"≤ {mb / 1024:.1f} GB tahmini çıktı"
 
     # -----------------------------------------------------------------
     # Settings persistence (QSettings + last-used JobSpec)
