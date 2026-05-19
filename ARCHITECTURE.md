@@ -113,7 +113,7 @@ Bu belge geliştiriciler için. Kullanıcı dokümantasyonu [README.md](README.m
 
 ## Dinamik optimizasyon katmanı
 
-Pipeline beş adaptif optimizasyon kullanır. **Hiçbiri hardcode değil**;
+Pipeline yedi adaptif optimizasyon kullanır. **Hiçbiri hardcode değil**;
 her biri runtime'da tespit edilen koşullara göre devreye girer ve
 başarısız olursa sessizce eski yola düşer.
 
@@ -129,11 +129,17 @@ CRF override yok), pipeline tüm encode yerine concat-copy yolunu seçer.
 | `loop` | `ffmpeg -stream_loop -1 -c copy` (encode YOK) | 100x+ |
 | `freeze` | last-frame extract → static tail encode → concat-copy | 30-100x |
 | `black` | lavfi black tail → concat-copy | 30-100x |
-| `image_card` | (henüz fast path yok) | — |
-| `intro_outro` | (composition komplex, fast path yok) | — |
+| `image_card` | image-as-video tail + concat-copy | 3-10x |
+| `intro_outro` (v0.12) | intro+outro encode-once cache + source stream-copy + concat-copy | 10-60x |
 
 Fast path başarısız olursa (eligibility yok, ffmpeg fail, output validation
 fail) pipeline otomatik full-encode yoluna düşer — fonksiyonalite garantili.
+
+**intro_outro caching (v0.12.0)**: build_fast_path intro ve outro'yu yalnızca
+ilk job'da encode eder ve `tmp_dir/intro_outro_cache/` altına kaydeder. Cache
+anahtarı `(source_w, source_h, fps, audio_sr, target_codec, encoder, intro/outro
+content hash)`. Sonraki jobs aynı intro+outro'yu cache'den okur; source ise her
+job için stream-copy ile concat — encode yok. Batch sonunda tmp_dir temizlenir.
 
 ### Longest-job-first dispatch (`core/pipeline.py:_dispatch_pool`)
 
@@ -174,6 +180,55 @@ Her encode (fast path veya full) tamamlandıktan sonra output'ta ffprobe
 ffmpeg occasionally returns 0 for truncated files (eksik moov atom);
 validation bunu yakalayıp FAILED işaretler. Fast path validation fail
 ederse silently full path'e retry yapılır.
+
+### ffmpeg hata parser'ı (`core/errors.py`)
+
+ffmpeg stderr ham + İngilizce. `parse_ffmpeg_failure(returncode, stderr)`
+11 yaygın hata pattern'ini Türkçe mesaj + actionable çözüm önerisine
+çevirir:
+
+| Pattern | Mesaj | Öneri |
+|---|---|---|
+| OpenEncodeSessionEx fail | NVENC oturumu açılamadı | max-parallel azalt |
+| nvenc driver too old | NVENC driver çok eski | Driver güncelle |
+| VAAPI init | VAAPI başlatılamadı | `usermod -aG video` |
+| QSV init | Intel QSV başlatılamadı | intel-media-driver yükle |
+| No space left | Disk dolu | Çıktıda yer aç |
+| Permission denied | Yazma izni yok | Çıktı izinlerini kontrol et |
+| Unknown encoder | Encoder bulunamadı | Başka encoder dene |
+| No such filter | Filter bulunamadı | ffmpeg derleme opsiyonları |
+| moov atom not found | Source bozuk | Dosyayı yeniden indir |
+| Out of memory | Bellek yetmedi | Paralel sayısı azalt |
+| Filter graph parse | Filter zinciri bozuk | GitHub issue aç |
+
+Eşleşmezse fallback: `ffmpeg exited N: <son 3 satır stderr>`.
+
+### Meta Reklam Modu (`core/compliance.py`)
+
+`JobSpec.meta_mode=True` olduğunda BatchRunner:
+1. `_enforce_meta_mode_codec` — HEVC/AV1/VP9 → H.264 zorla rewrite
+2. `_resolve_filters` — audio_normalize (-14 LUFS) + metadata_strip filter
+   zinciri yokken bile eklenir
+3. `build_job_command` — `-colorspace bt709 -color_primaries bt709
+   -color_trc bt709` output'a damgalanır
+4. `_apply_ffmpeg_result` — sonra `compliance.check_output(output_path)`
+   ile re-probe: codec H.264, pixfmt yuv420p, audio AAC, fps ≤ 60.
+   Fail varsa job FAILED, warning varsa job.error'a not düşülür ama
+   completed sayılır.
+
+Pre-encode: `MainWindow._maybe_show_meta_warnings()` source'ta low
+resolution / non-standard aspect / too-long source / high fps varsa
+bilgilendirme dialog'u gösterir (encode yine çalışır, sadece uyarı).
+
+### Process priority (`core/ffmpeg.py:_nice_popen_kwargs`)
+
+Her ffmpeg subprocess'i lowered priority ile başlar:
+- Linux/macOS: `Popen(preexec_fn=os.nice(10))` — yalnızca forklanan child
+  niced, Python parent normal kalır
+- Windows: `Popen(creationflags=0x4000)` — BELOW_NORMAL_PRIORITY_CLASS
+
+Sistem boştaysa ffmpeg yine tüm CPU'yu alır; interaktif task'lere karşı
+kaybeder. Uzun batch'in tarayıcı/IDE'yi yavaşlatmasını engeller.
 
 ## Genişletme noktaları (Strategy pattern + auto-discovery)
 
@@ -349,18 +404,32 @@ Real video fixture'ları `ffmpeg lavfi` ile üretilir — placeholder/demo data 
 ## Test stat
 
 ```
-225 test (221 fast + 4 slow)
+273 test (269 fast + 4 slow @pytest.mark.slow)
 - tests/test_*.py birim testleri (filter, encoder, preset, hardware,
-  scheduler, fast_path)
-- tests/test_fast_path.py — fast path eligibility + per-extender plan
-  construction
+  scheduler, fast_path, errors, compliance)
+- tests/test_fast_path.py — eligibility matrisi + per-extender plan
+  (loop=1 cmd, black=2 cmds, freeze=3 cmds, image_card=2 cmds,
+  intro_outro fast path eligibility)
 - tests/test_hardware.py — _os_can_probe + dynamic resource probes
   (free_ram_mb, is_rotational_disk)
+- tests/test_errors.py — ffmpeg stderr pattern matching (NVENC/VAAPI/
+  QSV init, disk full, OOM, codec/filter not found, moov, ...)
+- tests/test_compliance.py — Meta spec source check + output check +
+  meta_mode override shape
 - tests/test_pipeline.py @pytest.mark.integration uçtan uca ffmpeg
-  (fast path testler tarafından dolaylı doğrulanır)
+  (resume hash, fail tolerance, worker exception, summary invariants,
+  fast path testler tarafından dolaylı doğrulanır, Meta Mode codec
+  rewrite + filter injection)
 - tests/test_stress.py @pytest.mark.slow 1080p 30s yük testleri
-- tests/test_gui.py @pytest.mark.gui PySide6 widget'ları
-- tests/test_cli.py argparse + main()
+- tests/test_gui.py @pytest.mark.gui PySide6 widget'ları (28 test —
+  picker, settings, presets, filters, video list, reset, auto-preset,
+  meta toggle, compress toggle, profile persistence, ...)
+- tests/test_e2e.py @pytest.mark.gui + integration — gerçek
+  QApplication + ffmpeg + MainWindow user flows (drop-to-finish,
+  retry, Meta Mode, bulk retry, reset, status filter, extender
+  requirements validation)
+- tests/test_cli.py argparse + main() + --version + --doctor +
+  --reset-settings + --list-modes
 - tests/test_notify.py subprocess-mock'lu notify davranışı
 ```
 
@@ -386,6 +455,6 @@ cli.py, app.py
 ## Dosya boyut özeti
 
 ```
-src/   ~65 .py dosyası
-tests/ ~13 .py dosyası
+src/   69 .py dosyası
+tests/ 19 .py dosyası
 ```
