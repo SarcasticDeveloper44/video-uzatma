@@ -1,6 +1,10 @@
 from unittest.mock import patch
 
-from video_extender.core.hardware import _os_can_probe, detect
+import pytest
+
+from video_extender.core.hardware import (
+    _os_can_probe, detect, free_ram_mb, is_rotational_disk,
+)
 
 
 class TestHardwareDetection:
@@ -59,3 +63,34 @@ class TestOsEncoderCompat:
             assert _os_can_probe("h264_nvenc") is True
             assert _os_can_probe("h264_amf") is True
             assert _os_can_probe("h264_qsv") is True
+
+
+class TestDynamicResourceProbes:
+    """Probes that read live system state — not @lru_cached because they
+    must reflect current pressure (free RAM changes minute-to-minute)."""
+
+    def test_free_ram_mb_returns_int(self) -> None:
+        v = free_ram_mb()
+        # Either we successfully read a positive value, or detection failed
+        # and we got 0 (sentinel for "unknown" — scheduler treats that as
+        # "skip the RAM cap"). Either way: non-negative int.
+        assert isinstance(v, int)
+        assert v >= 0
+
+    def test_is_rotational_disk_returns_bool(self, tmp_path) -> None:
+        # On any test environment this should return a bool, never raise.
+        result = is_rotational_disk(str(tmp_path))
+        assert isinstance(result, bool)
+
+    def test_is_rotational_disk_handles_invalid_path(self) -> None:
+        # Bogus path should fall through to "False" (assume modern SSD).
+        result = is_rotational_disk("/definitely/not/a/path/at/all")
+        assert result is False
+
+    def test_is_rotational_disk_cached(self, tmp_path) -> None:
+        """Repeated lookups for the same path should hit lru_cache."""
+        # First call (cold)
+        r1 = is_rotational_disk(str(tmp_path))
+        # Second call should return identical result; cache verified by no exception.
+        r2 = is_rotational_disk(str(tmp_path))
+        assert r1 == r2

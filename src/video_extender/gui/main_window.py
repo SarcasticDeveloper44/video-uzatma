@@ -257,29 +257,33 @@ class MainWindow(QMainWindow):
         self._update_batch_eta()
 
     def _update_batch_eta(self) -> None:
-        """Aggregate per-job ETA into an overall batch ETA shown in the status bar."""
+        """Aggregate per-job ETA into an overall batch ETA.
+
+        Improved heuristic: instead of a flat mean of running speeds we use
+        the MAX (fastest) speed as the canonical "per-worker" speed estimate
+        — pending jobs almost always land on the fastest available slot
+        (longest-job-first scheduling sees to it). Median was too pessimistic
+        on mixed GPU+CPU runs where GPU is 5-10x faster.
+        """
         if not self._jobs:
             return
         running = [j for j in self._jobs if j.status == JobStatus.RUNNING]
         pending = [j for j in self._jobs if j.status in (JobStatus.PENDING, JobStatus.QUEUED)]
         if not running and not pending:
             return
-        # Running jobs contribute their reported ETA.
-        # Pending jobs estimate using mean speed of running jobs (or 1x fallback)
-        # and their own source duration scaled by extender (we use target_duration if known
-        # else fall back to source media duration).
         speeds = [j.speed for j in running if j.speed > 0]
         mean_speed = (sum(speeds) / len(speeds)) if speeds else 1.0
+        # Use max speed for pending-work projection: pending jobs will run on
+        # whichever slot frees up next, which is most likely the fastest one
+        # currently free (under longest-first scheduling).
+        peak_speed = max(speeds, default=mean_speed)
         running_eta = sum(j.eta_seconds for j in running) / max(1, len(running))
         pending_remaining = 0.0
         for j in pending:
             est_target = j.target_duration if j.target_duration > 0 else (
                 j.media.duration if j.media else 0.0
             )
-            pending_remaining += est_target / mean_speed
-        # Pending work runs in parallel across available worker slots, but a rough
-        # serial sum / num_workers is a decent estimate. We approximate with the
-        # number of running jobs as proxy for active workers.
+            pending_remaining += est_target / peak_speed
         n_workers = max(1, len(running))
         eta_total = running_eta + (pending_remaining / n_workers)
         from video_extender.gui.widgets.video_list import _format_eta
@@ -288,7 +292,8 @@ class MainWindow(QMainWindow):
         total = len(self._jobs)
         self.statusBar().showMessage(
             f"{completed}/{total} bitti · "
-            f"hız ~{mean_speed:.1f}x · toplam kalan ~{_format_eta(eta_total)}"
+            f"hız ~{mean_speed:.1f}x (peak {peak_speed:.1f}x) · "
+            f"toplam kalan ~{_format_eta(eta_total)}"
         )
 
     def _on_batch_started(self, count: int) -> None:

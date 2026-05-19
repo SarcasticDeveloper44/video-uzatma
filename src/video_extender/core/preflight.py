@@ -1,6 +1,7 @@
 """Preflight checks: validate environment before running a batch."""
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -103,6 +104,27 @@ def run(
                 test.unlink()
             except OSError as exc:
                 rep.fail(f"Output klasörüne yazılamıyor ({out}): {exc}")
+
+            # Disk-space sanity: estimate output footprint as 2× source total
+            # (worst case for re-encode at higher bitrate; fast path is much
+            # smaller). Fail if free space less than estimate; warn if tight.
+            if videos:
+                try:
+                    src_bytes = sum(v.stat().st_size for v in videos)
+                    free = shutil.disk_usage(out).free
+                    estimate = src_bytes * 2
+                    if free < estimate:
+                        rep.fail(
+                            f"Disk alanı yetersiz: çıktı için ~{estimate / 1024**3:.1f} GB "
+                            f"gerekli, sadece {free / 1024**3:.1f} GB boş."
+                        )
+                    elif free < estimate * 1.5:
+                        rep.warn(
+                            f"Disk alanı sınırda: çıktı için ~{estimate / 1024**3:.1f} GB, "
+                            f"{free / 1024**3:.1f} GB boş (komfor için 1.5x öneririz)."
+                        )
+                except OSError as exc:
+                    rep.warn(f"Disk alanı kontrol edilemedi: {exc}")
 
     # Ulimit sanity check (mostly Linux): open files
     try:

@@ -277,6 +277,34 @@ def _make_progress_callback(
     return _cb
 
 
+def _validate_output(job: Job) -> str | None:
+    """Probe the produced output. Return None on success, or an error string.
+
+    Catches corrupt-encode scenarios where ffmpeg returned 0 but the file is
+    truncated, unplayable, or duration is way off. ffmpeg occasionally writes
+    a partial mp4 with a missing moov atom and exits 0 — verify with ffprobe.
+    """
+    if job.output is None or not job.output.exists():
+        return "output file missing"
+    if job.output.stat().st_size < 1024:
+        return f"output suspiciously small ({job.output.stat().st_size} bytes)"
+    try:
+        media = _probe.probe_file(job.output)
+    except Exception as exc:  # noqa: BLE001
+        return f"output unprobable: {exc}"
+    if media.video is None:
+        return "output has no video stream"
+    # Duration within 2% of target (allows fps rounding + tail trim slack).
+    if job.target_duration > 0:
+        tol = max(0.5, job.target_duration * 0.02)
+        if abs(media.duration - job.target_duration) > tol:
+            return (
+                f"duration mismatch (got {media.duration:.2f}s, "
+                f"expected {job.target_duration:.2f}s)"
+            )
+    return None
+
+
 def _apply_ffmpeg_result(
     job: Job, result: FFmpegResult, state_file: Path | None,
 ) -> None:
@@ -286,6 +314,15 @@ def _apply_ffmpeg_result(
         job.error = "cancelled by user"
         return
     if result.success:
+        # Defense-in-depth: ffmpeg returning 0 doesn't always mean the output
+        # is healthy. Probe it before declaring success.
+        validation_error = _validate_output(job)
+        if validation_error is not None:
+            job.status = JobStatus.FAILED
+            job.error = f"output validation: {validation_error}"
+            if state_file is not None:
+                _config.mark_failed(state_file, job.source, job.error)
+            return
         job.status = JobStatus.COMPLETED
         job.progress = 1.0
         if state_file is not None and job.output is not None:
@@ -346,7 +383,16 @@ def _try_fast_path(
                 log.warning("fast path stage %d failed: %s", i,
                             ' | '.join(tail))
                 return False
-        # Success → mark job and trigger progress update.
+        # Compute target_duration on job so _validate_output knows what to expect.
+        if job.target_duration == 0.0:
+            # Set from spec if not already computed.
+            job.target_duration = _compute_target_duration(spec, job.media.duration)
+        validation_error = _validate_output(job)
+        if validation_error is not None:
+            log.warning("fast path output validation failed [%s]: %s",
+                        job.source.name, validation_error)
+            # Don't mark failed yet — fall through to full encode as recovery.
+            return False
         job.progress = 1.0
         job.status = JobStatus.COMPLETED
         if on_progress:

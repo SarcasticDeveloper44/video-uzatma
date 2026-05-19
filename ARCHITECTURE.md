@@ -61,7 +61,17 @@ Bu belge geliştiriciler için. Kullanıcı dokümantasyonu [README.md](README.m
         │
         │       execute_job:
         │         ┌────────────────────────────────────────────────┐
-        │         │ build_job_command:                              │
+        │         │ FAST PATH attempt (core.fast_path):            │
+        │         │   1. Eligibility: filter chain empty, source   │
+        │         │      codec matches target, container is mp4-   │
+        │         │      family, not CRF mode.                     │
+        │         │   2. extender.build_fast_path() → FastPathPlan │
+        │         │      (sequence of ffmpeg argv's; loop=1 cmd,   │
+        │         │      black=2 cmds, freeze=3 cmds).            │
+        │         │   3. Run all → validate output → SUCCESS.      │
+        │         │   On any failure: fall through to full path.  │
+        │         │                                                │
+        │         │ FULL PATH (build_job_command):                 │
         │         │   extender.build_plan(media, target_duration)  │
         │         │     → ExtenderPlan (filtergraph, extra inputs) │
         │         │   filters.build_chain(spec)                    │
@@ -72,6 +82,14 @@ Bu belge geliştiriciler için. Kullanıcı dokümantasyonu [README.md](README.m
         │         │   compose argv: hw_init + inputs +              │
         │         │                 -filter_complex + map +         │
         │         │                 encoder_args + -t target        │
+        │         │                                                │
+        │         │ Output validation (both paths):                │
+        │         │   _validate_output() probes output with        │
+        │         │   ffprobe: must exist, >1KB, parseable, video  │
+        │         │   stream present, duration ±2% of target.      │
+        │         │   Catches "ffmpeg returned 0 but output is     │
+        │         │   truncated" — fast path that fails validation │
+        │         │   silently retries via full path.              │
         │         └────────────────────────────────────────────────┘
         │         │
         │         ▼
@@ -92,6 +110,70 @@ Bu belge geliştiriciler için. Kullanıcı dokümantasyonu [README.md](README.m
 6.  Result: each job has terminal status. GUI updates table,
     CLI prints summary, system notification.
 ```
+
+## Dinamik optimizasyon katmanı
+
+Pipeline beş adaptif optimizasyon kullanır. **Hiçbiri hardcode değil**;
+her biri runtime'da tespit edilen koşullara göre devreye girer ve
+başarısız olursa sessizce eski yola düşer.
+
+### Stream-copy fast path (`core/fast_path.py`)
+
+`ExtenderStrategy`'ye opsiyonel `build_fast_path()` method'u eklendi.
+Eğer extender bu method'u tanımlamışsa ve eligibility koşulları sağlanıyorsa
+(filtersiz + source codec ↔ target codec eşleşmesi + mp4-family container +
+CRF override yok), pipeline tüm encode yerine concat-copy yolunu seçer.
+
+| Extender | Strateji | Tipik kazanç |
+|---|---|---|
+| `loop` | `ffmpeg -stream_loop -1 -c copy` (encode YOK) | 100x+ |
+| `freeze` | last-frame extract → static tail encode → concat-copy | 30-100x |
+| `black` | lavfi black tail → concat-copy | 30-100x |
+| `image_card` | (henüz fast path yok) | — |
+| `intro_outro` | (composition komplex, fast path yok) | — |
+
+Fast path başarısız olursa (eligibility yok, ffmpeg fail, output validation
+fail) pipeline otomatik full-encode yoluna düşer — fonksiyonalite garantili.
+
+### Longest-job-first dispatch (`core/pipeline.py:_dispatch_pool`)
+
+Jobs source duration'a göre desc sıralanır, slot'lar GPU-first sıralanır.
+ThreadPoolExecutor FIFO submit eder → en uzun video en hızlı encoder'a düşer.
+"Uzun CPU job batch sonunda tek başına çalışır" problemini elimine eder.
+
+### Parallel ffprobe (`core/pipeline.py:build_jobs` + `gui/workers.py:ProbeThread`)
+
+ThreadPoolExecutor 8-paralel ffprobe çalıştırır (her biri ~50ms metadata
+read). 100 video için 30sn → 4sn. GUI'de `as_completed` ile sırayla emit
+edilir (cancel responsive kalır).
+
+### Resource-aware parallelism (`core/hardware.py` + `core/scheduler.py`)
+
+İki yeni runtime probe:
+- `free_ram_mb()`: Linux `/proc/meminfo`, macOS `vm_stat`, Windows
+  `Get-CimInstance Win32_OperatingSystem`.
+- `is_rotational_disk(path)`: Linux `/sys/block/.../queue/rotational`,
+  macOS `diskutil -plist SolidState`, Windows `Get-PhysicalDisk MediaType`.
+
+Scheduler bu sinyalleri okur:
+- HDD source → CPU paralel cap = 2 (seek thrashing önlenir).
+- Free RAM < N × 800 MB → cap = `free_ram / 800` (OOM önlenir).
+
+Constraint'ler `scheduler.py` constants — call-site değişikliği olmadan
+ayarlanabilir.
+
+### Output integrity validation (`core/pipeline.py:_validate_output`)
+
+Her encode (fast path veya full) tamamlandıktan sonra output'ta ffprobe
+çalışır:
+- Dosya mevcut + >1KB
+- ffprobe parse edebilir
+- Video stream var
+- Duration target'ın ±%2'si içinde
+
+ffmpeg occasionally returns 0 for truncated files (eksik moov atom);
+validation bunu yakalayıp FAILED işaretler. Fast path validation fail
+ederse silently full path'e retry yapılır.
 
 ## Genişletme noktaları (Strategy pattern + auto-discovery)
 
@@ -267,9 +349,15 @@ Real video fixture'ları `ffmpeg lavfi` ile üretilir — placeholder/demo data 
 ## Test stat
 
 ```
-205 test (201 fast + 4 slow)
-- tests/test_*.py birim testleri (filter, encoder, preset, hardware, scheduler)
+225 test (221 fast + 4 slow)
+- tests/test_*.py birim testleri (filter, encoder, preset, hardware,
+  scheduler, fast_path)
+- tests/test_fast_path.py — fast path eligibility + per-extender plan
+  construction
+- tests/test_hardware.py — _os_can_probe + dynamic resource probes
+  (free_ram_mb, is_rotational_disk)
 - tests/test_pipeline.py @pytest.mark.integration uçtan uca ffmpeg
+  (fast path testler tarafından dolaylı doğrulanır)
 - tests/test_stress.py @pytest.mark.slow 1080p 30s yük testleri
 - tests/test_gui.py @pytest.mark.gui PySide6 widget'ları
 - tests/test_cli.py argparse + main()
