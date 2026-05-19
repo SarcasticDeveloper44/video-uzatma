@@ -31,6 +31,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Force UTF-8 stdout on Windows so progress prints with non-ASCII glyphs
+# (✓, etc.) don't trip cp1252 console encoding and abort the build.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent
 BUILD_VENV = ROOT / ".venv-build"
 DIST = ROOT / "dist"
@@ -268,14 +277,14 @@ def main(argv: list[str] | None = None) -> int:
         produced.rename(final)
         if platform.system() != "Windows" and final.is_file():
             os.chmod(final, 0o755)
-        print(f"\n✓ Build OK: {final}")
+        print(f"\n[OK] Build successful: {final}")
         size_mb = (
             sum(f.stat().st_size for f in final.rglob("*") if f.is_file()) / 1024**2
             if final.is_dir() else final.stat().st_size / 1024**2
         )
-        print(f"  Size: {size_mb:.1f} MB")
+        print(f"     Size: {size_mb:.1f} MB")
     else:
-        print(f"\n? Build artifact: {produced}")
+        print(f"\n[?] Build artifact: {produced}")
 
     return 0
 
