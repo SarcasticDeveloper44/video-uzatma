@@ -299,7 +299,11 @@ class MainWindow(QMainWindow):
         self.retry_btn.setEnabled(failed > 0)
         msg = f"{completed} tamam · {failed} hata · {skipped} atlandı"
         self.statusBar().showMessage(msg)
-        notify("Video Extender", msg)
+        # Only surface a desktop notification when the batch actually did work.
+        # No notify on pure-cancel (completed=failed=0) or zero-job runs — the
+        # user already knows they cancelled and doesn't need a tray ping.
+        if completed > 0 or failed > 0:
+            notify("Video Extender", msg)
         if failed:
             QMessageBox.information(
                 self, "Batch tamamlandı",

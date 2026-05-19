@@ -68,8 +68,16 @@ def main(argv: list[str]) -> int:
     sep = ";" if platform.system() == "Windows" else ":"
     env["PYTHONPATH"] = str(SRC) + (sep + existing_pp if existing_pp else "")
     cmd = [str(_venv_python()), "-m", "video_extender", *argv]
-    return subprocess.call(cmd, env=env)
+    try:
+        return subprocess.call(cmd, env=env)
+    except KeyboardInterrupt:
+        # Ctrl+C in the parent terminal — already propagated to the child.
+        # Exit cleanly without dumping a traceback at the user.
+        return 130
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None

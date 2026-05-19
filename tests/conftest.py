@@ -55,6 +55,30 @@ def _stub_modals(monkeypatch):
                         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
 
 
+@pytest.fixture(autouse=True)
+def _stub_desktop_notifications(monkeypatch):
+    """Replace utils.notify.notify() with a no-op for the entire test session.
+
+    Without this, every pytest run dispatches REAL desktop notifications via
+    notify-send / osascript / PowerShell — they pile up in the user's
+    notification tray (test_notify.py + main_window batch_finished tests
+    were observed leaking 'test title / test body' notifications to the
+    desktop). Tests should never produce side effects visible outside the
+    test process.
+    """
+    monkeypatch.setattr("video_extender.utils.notify.notify",
+                        lambda *a, **k: False)
+    # Also patch the imported reference in modules that already grabbed it.
+    for mod_path in (
+        "video_extender.gui.main_window.notify",
+        "video_extender.cli.notify",
+    ):
+        try:
+            monkeypatch.setattr(mod_path, lambda *a, **k: False)
+        except (AttributeError, ImportError):
+            pass
+
+
 def _has(binary: str) -> bool:
     return shutil.which(binary) is not None
 

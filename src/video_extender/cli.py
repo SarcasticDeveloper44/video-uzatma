@@ -265,7 +265,9 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
     completed, failed, _ = _print_batch_summary(jobs)
-    notify("Video Extender", f"{completed} bitti, {failed} hata.")
+    # Suppress desktop notification on zero-work runs (pure cancel / all skipped).
+    if completed > 0 or failed > 0:
+        notify("Video Extender", f"{completed} bitti, {failed} hata.")
     return 0 if failed == 0 else 1
 
 
